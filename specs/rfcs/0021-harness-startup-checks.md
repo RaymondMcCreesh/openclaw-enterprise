@@ -6,12 +6,12 @@ author: RaymondMcCreesh
 
 # Proposal: Standard Harness startup checks
 
-+ **ID:** RFC-0021
+- **ID:** RFC-0021
 - **Created:** 2026-10-17
 - **Last updated:** 2026-10-17
-- **RFC PR:** Not submitted
+- **RFC PR:** [#2764](https://github.com/openclaw/openclaw-enterprise/pull/2764)
 - **Implementation plan:** none; delivery is tracked [below](#delivery-and-verification)
-+ **Related:** [#96](https://github.com/openclaw/openclaw-enterprise/issues/96), [#1070](https://github.com/openclaw/openclaw-enterprise/pull/1070), [#2058](https://github.com/openclaw/openclaw-enterprise/pull/2058), [#2416](https://github.com/openclaw/openclaw-enterprise/issues/2416)
+- **Related:** [#96](https://github.com/openclaw/openclaw-enterprise/issues/96), [#1070](https://github.com/openclaw/openclaw-enterprise/pull/1070), [#2058](https://github.com/openclaw/openclaw-enterprise/pull/2058), [#2416](https://github.com/openclaw/openclaw-enterprise/issues/2416)
 
 <a id="problem-and-decision"></a>
 
@@ -49,11 +49,11 @@ This RFC does not persist Agent health or serving observations, change `Agent.st
 
 The exact-revision response uses the existing `RuntimeDiagnosticCheck` entries (`packages/contracts/src/index.ts:1816-1828`):
 
-| Check | Successful result | Failure result | Unknown result |
-| --- | --- | --- | --- |
-| `harness/runtime-readiness` | `succeeded`, `READY` | `failed`, the safe startup code | `unknown`, `NOT_RUN` or `UNAVAILABLE` |
-| `harness/model-authentication` | `succeeded`, `READY` | `failed`, `AUTHENTICATION_FAILED` | `unknown`, `NOT_RUN` or `UNAVAILABLE` |
-| `harness/model-connectivity` | `succeeded`, `READY` | `failed`, `MODEL_PROBE_TIMEOUT` or `MODEL_PROBE_FAILED` | `unknown`, `NOT_RUN` or `UNAVAILABLE` |
+| Check                          | Successful result    | Failure result                                          | Unknown result                        |
+| ------------------------------ | -------------------- | ------------------------------------------------------- | ------------------------------------- |
+| `harness/runtime-readiness`    | `succeeded`, `READY` | `failed`, the safe startup code                         | `unknown`, `NOT_RUN` or `UNAVAILABLE` |
+| `harness/model-authentication` | `succeeded`, `READY` | `failed`, `AUTHENTICATION_FAILED`                       | `unknown`, `NOT_RUN` or `UNAVAILABLE` |
+| `harness/model-connectivity`   | `succeeded`, `READY` | `failed`, `MODEL_PROBE_TIMEOUT` or `MODEL_PROBE_FAILED` | `unknown`, `NOT_RUN` or `UNAVAILABLE` |
 
 `checkedAt` is the time the runtime latched the startup-probe result. It is not `observedAt`, the controller's collection time, and it is not a claim about current readiness or live serving health. A missing or replaced revision has no matching observation and is unknown with `checkedAt: null`. An unreachable runtime, including an OpenShell-provisioned runtime whose private status port cannot be reached, is also unknown with `UNAVAILABLE`; transport loss must never become a failed model check.
 
@@ -91,9 +91,9 @@ Maintainers must confirm the generic-array shape, the `READY` code, and whether 
 
 ## References
 
-+ [Compute Driver diagnostics](../../docs/reference/drivers/compute.md) (lines 152-164)
-+ [Runtime diagnostic contracts](../../packages/contracts/src/index.ts) (lines 1814-1828)
-+ [Kubernetes runtime status](../../apps/controller/src/drivers/compute/kubernetes/runtime-entrypoints.ts) (lines 354-422)
-+ [Kubernetes exact-revision diagnostics](../../apps/controller/src/drivers/compute/kubernetes/index.ts) (lines 4034-4092 and 9175-9235)
-+ [Runtime failure persistence](../../apps/controller/src/worker.ts) (lines 880-894 and 4653-4676)
-+ [Sandbox lifecycle diagnostics](../../packages/occ/src/index.ts) (lines 858-885 and 3092-3127)
+- [Compute Driver diagnostics](../../docs/reference/drivers/compute.md) (lines 152-164)
+- [Runtime diagnostic contracts](../../packages/contracts/src/index.ts) (lines 1814-1828)
+- [Kubernetes runtime status](../../apps/controller/src/drivers/compute/kubernetes/runtime-entrypoints.ts) (lines 354-422)
+- [Kubernetes exact-revision diagnostics](../../apps/controller/src/drivers/compute/kubernetes/index.ts) (lines 4034-4092 and 9175-9235)
+- [Runtime failure persistence](../../apps/controller/src/worker.ts) (lines 880-894 and 4653-4676)
+- [Sandbox lifecycle diagnostics](../../packages/occ/src/index.ts) (lines 858-885 and 3092-3127)
