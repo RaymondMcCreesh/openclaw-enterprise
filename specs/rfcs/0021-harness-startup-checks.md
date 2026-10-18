@@ -17,7 +17,7 @@ author: RaymondMcCreesh
 
 ## Summary
 
-Standardize three cached startup checks in exact-revision Agent diagnostics: `runtime-readiness`, `model-authentication`, and `model-connectivity`. The checks use the existing generic array and name the runtime container as `component` (`agent` or `gateway`), while `check` is a separate name with no slash. Kubernetes Compute reads latched evidence and never starts model or provider work for the request. Missing, replaced, or unreachable evidence is `unknown`, never `failed`.
+Standardize three cached startup checks in exact-revision Agent diagnostics: `runtime-readiness`, `model-authentication`, and `model-connectivity`. The checks use the existing generic array and name the runtime container as `component` (`agent` or `gateway`), while `check` is a separate name with no slash. Kubernetes Compute builds these Harness entries from latched evidence only: obtaining them never reruns a startup model probe or creates model or provider work. Existing channel diagnostics are unchanged. Missing, replaced, or unreachable evidence is `unknown`, never `failed`.
 
 ## Motivation
 
@@ -25,7 +25,7 @@ At current `upstream/main` (`c2f3babc1`), runtime entrypoints latch only a failu
 
 PR #1070 already persists classified model-probe failures in deployment status immediately. The worker maps held codes to deployment codes (`apps/controller/src/worker.ts:881-898`) and finalizes a held runtime failure without waiting for convergence timeout (`apps/controller/src/worker.ts:4657-4682`). This RFC builds on PR #2763's centralized runtime vocabulary: that contract currently defines `RUNTIME_COMPONENTS`, diagnostic codes, failure checks, and generic diagnostic checks (`packages/contracts/src/runtime-failure.mjs:10-56`). This RFC extends that file with the three check names and `READY` and `NOT_RUN`; it does not add a new component to `RUNTIME_COMPONENTS`. The proposed component remains the existing runtime container so dedicated mode preserves separate `agent` and `gateway` evidence.
 
-The current generic contract already provides `component`, `check`, `state`, nullable `checkedAt`, and optional safe `code` (`packages/contracts/src/index.ts:1814-1828`). Diagnostics are a read path at the Compute boundary; they must not rerun startup work (`docs/reference/drivers/compute.md:152-164`).
+The current generic contract already provides `component`, `check`, `state`, nullable `checkedAt`, and optional safe `code` (`packages/contracts/src/index.ts:1814-1828`). For the new Harness entries, diagnostics are a read path at the Compute boundary; producing them must not rerun startup work (`docs/reference/drivers/compute.md:152-164`). Existing Slack channel checks still probe the Gateway on request: `runtimeDiagnosticsReport()` calls `slackChannelDiagnosticChecks()`, which calls `callNativeGateway("channels.status", { channel: "slack", probe: true, ... })` (`apps/controller/src/drivers/compute/kubernetes/runtime-entrypoints.ts:669-693`, with the Gateway SDK call at `:530-536`). This RFC does not change those channel diagnostics.
 
 <a id="scope"></a>
 
@@ -39,7 +39,7 @@ The current generic contract already provides `component`, `check`, `state`, nul
 
 ## Non-goals
 
-This RFC does not persist Agent health or serving observations, change `Agent.status`, add gateway/xDS or Pod-restart checks, run live model or provider probes on diagnostics requests, expose provider output, add automatic repair, or define DNS-specific classification. DNS uses `MODEL_PROBE_FAILED` until a later contract decision adds a distinct code.
+This RFC does not persist Agent health or serving observations, change `Agent.status`, add gateway/xDS or Pod-restart checks, require live model or provider probes to produce Harness entries, expose provider output, add automatic repair, or define DNS-specific classification. Existing channel diagnostics remain unchanged. DNS uses `MODEL_PROBE_FAILED` until a later contract decision adds a distinct code.
 
 <a id="design"></a>
 
@@ -79,7 +79,7 @@ The Console will update the exact-revision detail copy at `apps/controller/src/c
 
 ## Delivery and verification
 
-Native API integration tests will exercise exact-revision authorization, healthy, credential rejection, timeout, provider failure, not-run, missing/replaced revisions, unreachable OpenShell status, code masking, held-row deduplication, and the assertion that a diagnostics request starts no model call, process, WebSocket, or provider probe. Runtime integration tests will verify the status latch and mixed-version behavior. Kubernetes conformance tests will cover embedded and dedicated container components. Console tests will render both Harness evidence and the existing Slack/Sandbox rows without claiming live health. The implementation must include the provider-response distinction for each Driver and redacted k3d proof for healthy and rejected credentials; other failure classes may remain test-only.
+Native API integration tests will exercise exact-revision authorization, healthy, credential rejection, timeout, provider failure, not-run, missing/replaced revisions, unreachable OpenShell status, code masking, held-row deduplication, and the assertion that producing Harness entries starts no model call, process, WebSocket, or provider probe. Existing Slack channel diagnostics are out of scope and remain covered by their current behavior. Runtime integration tests will verify the status latch and mixed-version behavior. Kubernetes conformance tests will cover embedded and dedicated container components. Console tests will render both Harness evidence and the existing Slack/Sandbox rows without claiming live health. The implementation must include the provider-response distinction for each Driver and redacted k3d proof for healthy and rejected credentials; other failure classes may remain test-only.
 
 <a id="alternatives-and-open-decisions"></a>
 
