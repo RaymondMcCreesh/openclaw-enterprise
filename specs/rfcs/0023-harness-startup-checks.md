@@ -6,7 +6,7 @@ author: RaymondMcCreesh
 
 # Proposal: Standard Harness startup checks
 
-- **ID:** RFC-0021
+- **ID:** RFC-0023
 - **Created:** 2026-10-17
 - **Last updated:** 2026-10-17
 - **RFC PR:** [#2764](https://github.com/openclaw/openclaw-enterprise/pull/2764)
