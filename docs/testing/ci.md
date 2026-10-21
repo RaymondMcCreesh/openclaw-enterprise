@@ -26,8 +26,9 @@ Configure GitHub Actions variables, secrets, environments, and setting overrides
   a maintainer can [request full QA on a trusted pull request](#qa-matrix).
 - **Observability Demo:** runs only when the changed files match its workflow path filters.
 
-Docs-only PRs run static checks in CI; recognized test-only PRs select affected
-lanes. Other changes run all ordinary lanes. `CI Required` currently blocks
+Docs-only PRs run static checks in CI. Recognized test-only PRs select affected
+lanes, including Checks and Conformance 2 to type-check TypeScript tests.
+Other changes run all ordinary lanes. `CI Required` currently blocks
 merge on `main`. These workflows do not gate each Agent/platform deployment.
 
 <a id="ci-configuration"></a>
@@ -182,6 +183,10 @@ The matrix creates disposable Compose and Kubernetes control planes, both with
 Kubernetes compute, and separate OpenClaw/Codex Agents for each scenario. It does
 not use existing clusters or change the default kubeconfig. The exact test list
 is in the [QA manifest](../../scripts/ci/test-suites/qa-matrix.json).
+
+The `model-ui` scenario mounts the example console theme on Compose or Kubernetes
+and checks its branding through sign-in and the Agent workflow. Other scenarios
+do not require the theme or an extra API rollout.
 
 Every push to `main` runs the marked Codex scenarios on Compose and Kubernetes, and the
 complete OpenShell lane. Each push has its own concurrency group so a later

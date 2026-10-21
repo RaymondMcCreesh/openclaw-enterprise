@@ -11,7 +11,7 @@ import { clearRuntimeDenials } from "./agents/logs.mjs";
 import { createApiClient } from "./api-client.mjs";
 import { createViewLifetime } from "./view-lifetime.mjs";
 import { createNavigation, pages } from "./navigation.mjs";
-import { createShell, initials, panel, sorted } from "./shell.mjs";
+import { brandContents, createShell, initials, panel, sorted } from "./shell.mjs";
 import { createDraftStore } from "./drafts.mjs";
 import { renderRuntimeImages } from "./runtime-images.mjs";
 import { renderNamespaces } from "./namespaces.mjs";
@@ -1019,12 +1019,7 @@ function showLogin(message = "", destination = null) {
     element(
       "main",
       { className: "auth" },
-      element(
-        "p",
-        { className: "brand" },
-        element("img", { src: "/console/oce-mascot.png", alt: "", width: "40", height: "40" }),
-        "OpenClaw Enterprise",
-      ),
+      element("p", { className: "brand" }, ...brandContents(40)),
       element("h1", {}, "Sign in"),
       usernameHint,
       form,

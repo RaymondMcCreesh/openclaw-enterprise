@@ -3906,7 +3906,7 @@ test("audit rejects an unusable file duration table", async (t) => {
 test("audit requires current discovered test files and rejects duplicate ownership", async (t) => {
   const root = await fixture(t);
   await writeFile(join(root, "tests/integration/mapped.test.mjs"), "import 'node:test';\n");
-  await writeFile(join(root, "tests/integration/unmapped.test.mjs"), "import 'node:test';\n");
+  await writeFile(join(root, "tests/integration/unmapped.test.ts"), "import 'node:test';\n");
   await mkdir(join(root, "tests/docs"), { recursive: true });
   await writeFile(join(root, "tests/docs/unmapped.test.mjs"), "import 'node:test';\n");
   await writeJson(join(root, "manifest.json"), {
@@ -3949,7 +3949,7 @@ test("audit requires current discovered test files and rejects duplicate ownersh
       .filter((entry) => entry.code === "unmapped-file")
       .map((entry) => entry.file)
       .sort(),
-    ["tests/docs/unmapped.test.mjs", "tests/integration/unmapped.test.mjs"],
+    ["tests/docs/unmapped.test.mjs", "tests/integration/unmapped.test.ts"],
   );
 });
 

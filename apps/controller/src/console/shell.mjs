@@ -1,6 +1,18 @@
 import { displayDate } from "./agents/list.mjs";
 import { element, button } from "./dom.mjs";
 
+export function brandContents(size) {
+  const displayName =
+    document.querySelector('meta[name="occ-console-display-name"]')?.content ??
+    "OpenClaw Enterprise";
+  const src =
+    document.querySelector('meta[name="occ-console-logo"]')?.content ?? "/console/oce-mascot.png";
+  return [
+    element("img", { src, alt: "", width: String(size), height: String(size) }),
+    element("span", { className: "brand-name", title: displayName }, displayName),
+  ];
+}
+
 export function panel(target, title, description, actionLabel, action, requestId) {
   target.replaceChildren(
     element(
@@ -143,12 +155,7 @@ export function createShell({ app, pages, route, pageUrl, navigate, loadPage, lo
       element(
         "main",
         { className: "auth" },
-        element(
-          "p",
-          { className: "brand" },
-          element("img", { src: "/console/oce-mascot.png", alt: "", width: "40", height: "40" }),
-          "OpenClaw Enterprise",
-        ),
+        element("p", { className: "brand" }, ...brandContents(40)),
         element("h1", {}, title),
         element("p", { role: "status", className: "muted" }, description),
         action ? button(actionLabel, action) : null,
@@ -534,8 +541,7 @@ export function createShell({ app, pages, route, pageUrl, navigate, loadPage, lo
       element(
         "p",
         { className: "brand" },
-        element("img", { src: "/console/oce-mascot.png", alt: "", width: "20", height: "20" }),
-        "OpenClaw Enterprise",
+        ...brandContents(20),
         debug
           ? element(
               "span",
@@ -651,12 +657,7 @@ export function createShell({ app, pages, route, pageUrl, navigate, loadPage, lo
       "div",
       { className: "topbar" },
       mobileToggle,
-      element(
-        "p",
-        { className: "brand brand--bar" },
-        element("img", { src: "/console/oce-mascot.png", alt: "", width: "20", height: "20" }),
-        "OpenClaw Enterprise",
-      ),
+      element("p", { className: "brand brand--bar" }, ...brandContents(20)),
       session ? accountMenus().top.account : null,
     );
     const wrapper = element("div", {}, topbar, main);
