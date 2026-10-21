@@ -3,7 +3,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { chmod, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import test, { after } from "node:test";
+import test, { after, before } from "node:test";
 import pg from "pg";
 import {
   loadInstallationConfiguration,
@@ -55,9 +55,11 @@ const productionServer = {
 };
 
 // Boots run concurrently, about one per CPU. A boot killed at its timeout rejects with
-// the signal instead of reading as a wrong exit status.
+// the signal instead of reading as a wrong exit status. The timeout only guards against a
+// process that never exits: every boot here ends in a startup refusal within a second or two
+// on an idle machine, and on a loaded runner the same boot took more than 10 s.
 const limit = concurrencyLimit();
-async function boot(script, env, timeout = 10_000) {
+async function boot(script, env, timeout = 30_000) {
   const { signal, ...result } = await limit(() =>
     captureChild(process.execPath, [script], {
       cwd: process.cwd(),
@@ -70,6 +72,45 @@ async function boot(script, env, timeout = 10_000) {
   }
   return result;
 }
+
+// Warm the compile cache with one API and one worker boot through production startup to the
+// database connection, the furthest any case here goes. Node writes a cold cache when a process
+// exits, and the first test starts all its boots at once: each one compiled the whole graph and
+// spent seconds writing the same cache at exit, so on a loaded runner the valid case's API had
+// logged its startup error but had not exited within its 15 s budget.
+before(async () => {
+  const directory = await mkdtemp(join(tmpdir(), "occ-installation-warm-"));
+  try {
+    const path = join(directory, "installation.yaml");
+    await writeFile(path, JSON.stringify(installation()), "utf8");
+    const env = {
+      PATH: process.env.PATH,
+      NODE_ENV: "production",
+      OCC_CONFIG_PATH: path,
+      OCC_DATABASE_URL: "postgresql://127.0.0.1:1/occ",
+    };
+    const [server, worker] = await settled([
+      boot("apps/controller/src/server.mjs", { ...env, ...productionServer }),
+      boot("apps/controller/src/worker.mjs", env),
+    ]);
+    // A boot that stopped earlier would leave the composition modules uncached.
+    const warmUp = "compile-cache warm-up";
+    assert.equal(server.status, 1, warmUp);
+    assert.equal(
+      startupDiagnostic(server.stderr, "startup-error").code,
+      "PERSISTENCE_UNAVAILABLE",
+      warmUp,
+    );
+    assert.equal(worker.status, 1, warmUp);
+    assert.equal(
+      startupDiagnostic(worker.stderr, "worker.startup-error").code,
+      "PERSISTENCE_UNAVAILABLE",
+      warmUp,
+    );
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
 
 async function fixture(t, configuration = installation()) {
   const directory = await mkdtemp(join(tmpdir(), "occ-installation-startup-"));
@@ -222,7 +263,7 @@ test("API and worker refuse a bad observability host or runtime image before ope
   const refuses = async (file, code, label) =>
     settled(
       processes.map(async ([script, event, env]) => {
-        const result = await boot(script, { ...env, OCC_CONFIG_PATH: file }, 15_000);
+        const result = await boot(script, { ...env, OCC_CONFIG_PATH: file });
         assert.equal(result.status, 1, script);
         assert.ok(!result.stderr.includes(file), result.stderr);
         const diagnostic = startupDiagnostic(result.stderr, event);
