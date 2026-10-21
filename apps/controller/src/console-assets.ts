@@ -37,6 +37,7 @@ const CONSOLE_ASSETS = new Map([
       "navigation.mjs",
       "shell.mjs",
       "namespaces.mjs",
+      "secrets.mjs",
       "runtime-images.mjs",
       "agents/list.mjs",
       "agents/collection.mjs",
@@ -102,6 +103,7 @@ const CONSOLE_SHELL_ROUTES = new Set([
   "/console/agents",
   "/console/backends",
   "/console/namespaces",
+  "/console/secrets",
   "/console/settings",
 ]);
 

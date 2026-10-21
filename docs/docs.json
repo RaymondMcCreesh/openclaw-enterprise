@@ -129,6 +129,10 @@
                     "label": "Channels and Credentials"
                   },
                   {
+                    "page": "guides/console/secrets",
+                    "label": "Manage Secrets"
+                  },
+                  {
                     "page": "guides/console/agent-sharing",
                     "label": "Share Agents"
                   },

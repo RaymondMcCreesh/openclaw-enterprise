@@ -163,7 +163,7 @@ export async function newPage(t, fixture, options = {}) {
   return { page, artifacts };
 }
 
-const signedInPath = /\/console\/(agents|backends|namespaces|settings)/;
+const signedInPath = /\/console\/(agents|backends|namespaces|settings|secrets)/;
 
 // Signs the page in and opens `path`. A fresh tab (still on about:blank) signs in with the same
 // Better Auth password request the form sends, made in the page's own browser context so the
