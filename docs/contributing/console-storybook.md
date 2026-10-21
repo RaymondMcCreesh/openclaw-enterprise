@@ -28,6 +28,29 @@ Serve at the origin root for absolute `/console/` URLs. Build fingerprints keep
 cached fixture pages and module imports current. CI uploads a static artifact
 without publishing the documentation site.
 
+## Write Console modules in TypeScript
+
+Put browser code in `.mts` files and import the public `.mjs` path. TypeScript
+resolves that import to the source file. `pnpm typecheck` checks it against browser
+APIs and rejects syntax that needs more than type erasure.
+
+Add the source path to the controller's allowlist in
+`apps/controller/src/console-assets.ts`. The controller and Storybook both use
+Node 24 to remove types, preserve line numbers, and serve JavaScript at the same
+URL as before.
+
+Node resolves imports literally, including imports inside an `.mts` file. Point
+Node callers of a standalone module directly at its `.mts` source. For example,
+when the starter model moves, change the first-agent scripts and test helpers to
+import `agents/starter-model.mts`.
+Test browser behavior through the served `.mjs` URLs, where the controller
+resolves the whole module graph.
+
+Keep a temporary source forwarder such as `dom.mjs` only while a Node caller
+still reaches that exact path. Renaming the caller alone leaves the import in
+place. Remove the forwarder, then run those consumers and the browser tests to
+verify both paths. A browser-only module needs no forwarder.
+
 ## Appearance review
 
 Use **Pages/Agents → Populated** to review the shared shell and controls at
@@ -157,9 +180,9 @@ Moved to [Agent workflows](console-storybook-agent-workflows.md#delete).
 `scripts/console-storybook/` installs from its own manifest and lockfile under the
 seven-day release-age policy, independently of root dependencies.
 
-- `prepare-assets.mjs` copies current console assets and the controller-served
-  shared contract modules into ignored `dist/assets/`. Rebuild after source
-  edits; the development server does not recopy sources.
+- `prepare-assets.mjs` reads the public Console assets through the controller's
+  asset reader, then versions the preview in `dist/assets/`. Rebuild after source
+  edits so the development server serves the new assets.
 - `public/scenarios.mjs` owns story descriptions, initial data options, failure
   responses, automatic setup actions, and workflow instructions.
 - `public/fixtures.mjs` intercepts API calls inside the preview. Unconfigured
