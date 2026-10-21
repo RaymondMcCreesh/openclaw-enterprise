@@ -431,7 +431,7 @@ export async function waitForIdleFetches(page) {
 export async function waitForCondition(predicate, message, timeoutMs = 5_000) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
-    if (predicate()) {
+    if (await predicate()) {
       return;
     }
     await new Promise((resolve) => setTimeout(resolve, 50));
@@ -728,6 +728,15 @@ export function statusTone(locator, { text = false } = {}) {
     }),
     text,
   );
+}
+
+// Whether a reload or tab close would ask first: the console cancels beforeunload.
+export function asksBeforeUnload(page) {
+  return page.evaluate(() => {
+    const event = new Event("beforeunload", { cancelable: true });
+    globalThis.dispatchEvent(event);
+    return event.defaultPrevented;
+  });
 }
 
 // Whether the locator's element holds focus.
