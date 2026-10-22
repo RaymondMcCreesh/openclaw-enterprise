@@ -4,47 +4,16 @@
 // certificate: the same stdout, the same failures, and kubectl itself for
 // anything it does not serve.
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
-import { readFileSync } from "node:fs";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:https";
 import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 import test from "node:test";
+import { selfSigned } from "../helpers/certificates.mjs";
 import { kubectlGetJson, plainGet } from "../helpers/kubernetes-api-read.mjs";
 import { isTransientKubectlFailure } from "../helpers/kubernetes-real.mjs";
 import { refusingPort } from "../helpers/available-port.mjs";
 import { listen } from "../helpers/listen.mjs";
-
-function selfSignedCertificate(directory, name, subjectAltName) {
-  const keyPath = join(directory, `${name}.key`);
-  const certPath = join(directory, `${name}.crt`);
-  const generated = spawnSync(
-    "openssl",
-    [
-      "req",
-      "-x509",
-      "-newkey",
-      "ec",
-      "-pkeyopt",
-      "ec_paramgen_curve:prime256v1",
-      "-nodes",
-      "-days",
-      "1",
-      "-keyout",
-      keyPath,
-      "-out",
-      certPath,
-      "-subj",
-      `/CN=${name}`,
-      "-addext",
-      `subjectAltName=${subjectAltName}`,
-    ],
-    { encoding: "utf8" },
-  );
-  assert.equal(generated.status, 0, generated.stderr || generated.error?.message);
-  return { key: readFileSync(keyPath), cert: readFileSync(certPath) };
-}
 
 const resource = (name, kind, namespaced, shortNames) => ({
   name,
@@ -125,8 +94,16 @@ const missing = {
 async function cluster(t) {
   const directory = await mkdtemp(join(tmpdir(), "oce-api-read-"));
   t.after(() => rm(directory, { recursive: true, force: true }));
-  const server = selfSignedCertificate(directory, "api-server", "IP:127.0.0.1");
-  const client = selfSignedCertificate(directory, "operator", "DNS:operator");
+  const server = await selfSigned(directory, {
+    name: "api-server",
+    commonName: "api-server",
+    subjectAltName: "IP:127.0.0.1",
+  });
+  const client = await selfSigned(directory, {
+    name: "operator",
+    commonName: "operator",
+    subjectAltName: "DNS:operator",
+  });
   const requests = [];
   // Requests answered so far per URL (a Map: URLs come from the client).
   const seen = new Map();
@@ -236,7 +213,7 @@ async function cluster(t) {
             name: "target",
             cluster: {
               server: url,
-              "certificate-authority-data": server.cert.toString("base64"),
+              "certificate-authority-data": Buffer.from(server.cert).toString("base64"),
             },
           },
         ],
@@ -250,8 +227,8 @@ async function cluster(t) {
     return { kubeconfigPath, kubernetesContext: "target" };
   };
   const user = {
-    "client-certificate-data": client.cert.toString("base64"),
-    "client-key-data": client.key.toString("base64"),
+    "client-certificate-data": Buffer.from(client.cert).toString("base64"),
+    "client-key-data": Buffer.from(client.key).toString("base64"),
   };
   return {
     selection: await kubeconfig(`https://127.0.0.1:${listener.address().port}`, user),
