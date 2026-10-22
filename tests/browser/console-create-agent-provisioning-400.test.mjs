@@ -15,6 +15,7 @@ import {
   nativeValues,
   newPage,
   pathRequests,
+  waitForEnabled,
 } from "./console-agents-browser-helpers.mjs";
 import {
   agentPostRequests,
@@ -183,7 +184,7 @@ test("Dedicated Agent provisioning shows the API's 400 message for an inline mod
     0,
   );
   // A 400 means the request was never admitted, so the form unlocks for a fix.
-  assert.equal(await configuration.isDisabled(), false);
+  await waitForEnabled(configuration);
 });
 
 test("The pinned runtime lets the Console request dedicated OpenClaw provisioning", async (t) => {
@@ -584,7 +585,7 @@ test("A refused Create Agent submit clears its progress and focuses the refusal"
   assert.equal(active.role, "alert");
   assert.equal(active.text, await refusal.textContent());
   // The form unlocks for a fix, and the refusal keeps focus.
-  assert.equal(await configuration.isDisabled(), false);
+  await waitForEnabled(configuration);
 });
 
 test("Dedicated Agent provisioning names a Namespace that is not ready", async (t) => {
