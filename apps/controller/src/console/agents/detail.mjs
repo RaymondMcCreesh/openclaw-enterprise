@@ -1430,16 +1430,98 @@ export async function renderAgentDetail(context, { agent: preloadedAgent = null 
     { className: "stat-value" },
     element("span", { className: "badge" }, "Not verified"),
   );
-  function setLiveServing(mayBeOffline) {
-    const badge = liveServingValue.firstElementChild;
-    setText(badge, mayBeOffline ? "May be offline" : "Not verified");
-    if (mayBeOffline) {
-      if (badge.dataset.tone !== "warning") {
-        badge.dataset.tone = "warning";
-      }
-    } else if (badge.dataset.tone) {
-      delete badge.dataset.tone;
+  const liveServingNote = element("p", { className: "stat-help" });
+  // A failed deployment that probably left nothing serving (see renderLatestDeployment).
+  let mayBeOfflineAfterFailure = false;
+  // The Sandbox Driver's record of the current version's Sandbox, read once per serving state
+  // (finding 2152). Nothing restarts a lost Sandbox, so Live serving says so and names the next
+  // step. A status that cannot be read is unknown, never lost.
+  let harnessRead = null;
+  let harnessReads = 0;
+  // The current version the read in flight or answered is for, or null when none is wanted.
+  let harnessRequested = null;
+  // Only a running Agent's dedicated current version has a Sandbox to read. The version's own
+  // mode decides once the version list shows it; the Agent's saved mode can differ from it.
+  // The note line is reserved from the first paint (console.css), so the answer moves nothing.
+  const harnessExpected = () =>
+    !deleting &&
+    currentRuntimeState === "running" &&
+    Boolean(currentRevisionId) &&
+    (visibleRevisions.find((revision) => revision.id === currentRevisionId)?.harness?.mode ??
+      currentAgent.executionMode) === "dedicated";
+  function syncHarnessRead() {
+    const wanted = harnessExpected() ? currentRevisionId : null;
+    if (wanted === harnessRequested) {
+      return;
     }
+    // A stop, a new current version or a deletion drops any answer for the old state.
+    const read = ++harnessReads;
+    harnessRequested = wanted;
+    harnessRead = null;
+    if (wanted === null) {
+      return;
+    }
+    void request(`${path}/harness-status`)
+      .then(
+        (status) => status,
+        () => null,
+      )
+      .then((status) => {
+        if (read !== harnessReads || !context.isCurrent() || deleting) {
+          return;
+        }
+        // A read that failed is kept as null: the note then says the status is unknown.
+        harnessRead = { revisionId: wanted, status };
+        renderLiveServing();
+      });
+  }
+  function renderLiveServing() {
+    syncHarnessRead();
+    const expected = harnessExpected();
+    const answer = harnessRead?.revisionId === currentRevisionId ? harnessRead : null;
+    const harness =
+      answer?.status?.status === "observed" && answer.status.revisionId === currentRevisionId
+        ? answer.status.harness
+        : undefined;
+    const lost = expected && harness?.state === "lost";
+    const badge = liveServingValue.firstElementChild;
+    setText(
+      badge,
+      lost ? "Sandbox lost" : mayBeOfflineAfterFailure ? "May be offline" : "Not verified",
+    );
+    const tone = lost ? "danger" : mayBeOfflineAfterFailure ? "warning" : undefined;
+    if (tone === undefined) {
+      if (badge.dataset.tone) {
+        delete badge.dataset.tone;
+      }
+    } else if (badge.dataset.tone !== tone) {
+      badge.dataset.tone = tone;
+    }
+    liveServingNote.classList.toggle("stat-help-line", expected);
+    if (!expected) {
+      setText(liveServingNote, "");
+    } else if (answer === null) {
+      setDelayedText(liveServingNote, "", "Checking Sandbox…");
+    } else if (lost) {
+      // OCC does not restart a lost Sandbox. The notes stay short enough for one line in the
+      // narrowest column (beside the sidebar), so the reserved line never grows.
+      setText(liveServingNote, "Deploy a new version.");
+    } else if (answer.status === null || harness?.state === "unknown") {
+      setText(liveServingNote, "Sandbox status unknown.");
+    } else if (harness?.code === "HARNESS_RESTARTING") {
+      setText(liveServingNote, "Harness restarting.");
+    } else if (harness?.state === "running") {
+      setText(liveServingNote, "Sandbox running.");
+    } else if (harness?.state === "starting") {
+      setText(liveServingNote, "Sandbox starting.");
+    } else {
+      // The Sandbox Driver keeps no record of this Sandbox.
+      setText(liveServingNote, "");
+    }
+  }
+  function setLiveServing(mayBeOffline) {
+    mayBeOfflineAfterFailure = mayBeOffline;
+    renderLiveServing();
   }
   // A requested stop belongs in the summary, not only in the Stop row at the bottom (finding
   // 1899). It is attached only once the Agent has a version: an Agent is created stopped.
@@ -1463,8 +1545,9 @@ export async function renderAgentDetail(context, { agent: preloadedAgent = null 
     { className: "agent-current-summary stats", "aria-label": "Agent state at a glance" },
     stat("Selected version", currentVersionValue, currentVersionNote),
     stat("Latest visible deployment", latestDeploymentValue, latestDeploymentNote),
-    stat("Live serving", liveServingValue),
+    stat("Live serving", liveServingValue, liveServingNote),
   );
+  renderLiveServing();
   const pageDisclosure = element(
     "details",
     { className: "disclosure" },
@@ -2543,6 +2626,7 @@ export async function renderAgentDetail(context, { agent: preloadedAgent = null 
     currentAgent = freshAgent;
     stopPanel.updateAgent(freshAgent);
     if (servingChanged) {
+      renderLiveServing();
       retainedTabs.clear();
       if (mountedTab) {
         // Leaving must not put a tab built for the old serving state back in the cache.
