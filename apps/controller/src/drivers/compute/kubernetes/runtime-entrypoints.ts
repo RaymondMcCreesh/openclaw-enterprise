@@ -2280,10 +2280,7 @@ ${OPENCLAW_AUTH_PROBE_HELPERS}
 ${startupPhaseHelper("gateway")}
 ${gatewayStateMigrationHelper("restart the Pod")}
 
-function gatewayRuntimeReady() {
-  if (pluginRuntimeStatusPort() !== undefined && pluginStatusReport.phase !== "ready") {
-    return false;
-  }
+function nativeGatewayAnswers(path) {
   return new Promise((resolve) => {
     let settled = false;
     const settle = (ready) => {
@@ -2295,7 +2292,7 @@ function gatewayRuntimeReady() {
       {
         host: "127.0.0.1",
         port: requireNonEmptyString(process.env.OPENCLAW_GATEWAY_PORT, "Gateway port"),
-        path: "/readyz",
+        path,
         timeout: 2_000,
       },
       (response) => {
@@ -2306,6 +2303,19 @@ function gatewayRuntimeReady() {
     request.on("timeout", () => request.destroy());
     request.on("error", () => settle(false));
   });
+}
+
+// OpenClaw's /readyz admits a Gateway whose agent databases are still in
+// background startup inspection, and a chat turn then gets HTTP 500 until it
+// finishes (19.6 s after start in finding 2185). /startupz stays 503 until
+// every agent's inspection settles; /readyz adds channel, state database,
+// failed agent database and plugin reload health.
+async function gatewayRuntimeReady() {
+  if (pluginRuntimeStatusPort() !== undefined && pluginStatusReport.phase !== "ready") {
+    return false;
+  }
+  const answers = await Promise.all([nativeGatewayAnswers("/startupz"), nativeGatewayAnswers("/readyz")]);
+  return answers.every((ready) => ready);
 }
 
 startPluginRuntimeStatusServer(gatewayRuntimeReady);
