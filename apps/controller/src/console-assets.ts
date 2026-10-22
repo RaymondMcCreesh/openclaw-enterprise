@@ -51,6 +51,7 @@ const CONSOLE_ASSETS = new Map([
       "agents/logs-view.mts",
       "agents/presets.mjs",
       "agents/create.mjs",
+      "agents/provisioning-job.mts",
       "agents/plugin-discovery.mjs",
       "agents/slack-directory.mjs",
       "agents/slack-approvers.mjs",
