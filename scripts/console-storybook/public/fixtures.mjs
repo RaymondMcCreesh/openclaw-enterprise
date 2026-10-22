@@ -639,7 +639,7 @@ export function installFixture(scenario, evidence) {
     namespaceId,
     agentId: agent.id,
     version: 1,
-    additions: [],
+    additions: scenario.policyState === "protected" ? [policyGrant] : [],
   };
   if (scenario.policyState === "failed") {
     sandboxPolicy.application = {
@@ -1456,6 +1456,7 @@ export function installFixture(scenario, evidence) {
             policy: sandboxPolicy,
             configuration: policyDescriptor,
             editingEnabled: policyEditing,
+            protectedExecution: scenario.policyState === "protected",
             ceiling: [policyGrant],
             defaults:
               scenario.policyState === "unsupported"
@@ -1469,7 +1470,7 @@ export function installFixture(scenario, evidence) {
                       },
                     ],
                   },
-            ...(scenario.policyState === "unsupported"
+            ...(scenario.policyState === "unsupported" || scenario.policyState === "protected"
               ? {}
               : { defaultsRevisionId: candidateRevisionId }),
             capability:
@@ -1500,6 +1501,13 @@ export function installFixture(scenario, evidence) {
           }
           if (scenario.policyState === "editDenied") {
             return error(403, "AUTHORIZATION_DENIED");
+          }
+          if (scenario.policyState === "protected" && body.additions.length > 0) {
+            return error(
+              409,
+              "SANDBOX_POLICY_PROTECTED_EXECUTION",
+              "Protected execution applies to this Agent: the Credential Proxy routes alone govern its egress, so network policy additions are refused; only an empty policy can be saved.",
+            );
           }
           if (body.expectedVersion !== sandboxPolicy.version) {
             return error(409, "RESOURCE_STATE_CONFLICT");

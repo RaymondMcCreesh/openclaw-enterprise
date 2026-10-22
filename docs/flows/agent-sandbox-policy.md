@@ -68,7 +68,17 @@ CLI callers retain the same field and cause without terminal controls.
 `packages/occ/src/index.ts:updateAgentSandboxPolicy` independently authorizes
 Agent `manage_policy` and SandboxPolicy `update`, locks the Namespace and Agent,
 and checks editing, expected version, pending work, complete ceiling coverage,
-and registry-resolved Driver admission. The saved additions come from the admitted snapshot. `apps/controller/src/http/sandbox-policy.ts` records the
+and registry-resolved Driver admission. The saved additions come from the
+admitted snapshot. While the active or next revision runs under protected
+execution (the Installation selects the Credential Proxy), additions are refused
+with `409 SANDBOX_POLICY_PROTECTED_EXECUTION`, as are live application to a
+protected revision and a protected deploy carrying them; protected
+revisions admit no policy snapshot. The policy view reports `protectedExecution`.
+For an Agent with repository bindings (or a Git-bound active revision), Driver
+admission gets `repositoryCredentials`: the OpenShell Driver with its Git route
+refuses a grant or default reaching `github.com` or a name under it, or naming an
+IP address, with a `409` naming it. Adding a binding beside such a saved grant, deploy, and provisioning refuse it too.
+`apps/controller/src/http/sandbox-policy.ts` records the
 nonsecret approved additions with their version in the same transaction.
 The required facet argument currently admits `networking` only. Other facets
 fail before network policy access. The temporary
