@@ -7,17 +7,22 @@ import type { Principal, Restriction } from "../../packages/contracts/src/index.
 
 import { createConsoleAppFixture } from "../helpers/console-app.mjs";
 import {
+  apiRequests,
   detailUrl,
   fileBrowser,
+  holdRequests,
   login,
   nativeValues,
   newPage,
+  nextFrames,
+  pathRequests,
   waitForEnabled,
 } from "./console-agents-browser-helpers.mjs";
 import {
   createRepositoryLaunchFixture,
   openAdvancedSettings,
 } from "./console-agents-test-support.mjs";
+import { createPolicyConsole } from "./console-sandbox-policy-fixture.ts";
 
 // Every test opens its own context in one Chromium per file.
 const browser = fileBrowser();
@@ -402,3 +407,94 @@ test("a refused workspace file save names Agent operate", async (t) => {
     .waitFor();
   assert.equal(await editor.inputValue(), "after");
 });
+
+for (const reply of ["an incomplete preview", "a save with different rules"] as const) {
+  test(`Agent policy does not apply after ${reply}`, async (t) => {
+    const grant = {
+      id: "python-docs",
+      binary: "/usr/bin/python3.11",
+      host: "example.org",
+      ports: [{ from: 443, to: 443 }],
+    };
+    const { fixture, namespace, agent, base } = await createPolicyConsole(t, [grant]);
+    const seeded = await fixture.request("PUT", base, {
+      body: { expectedVersion: 1, additions: [grant] },
+    });
+    assert.equal(seeded.status, 200);
+    const { revision } = await fixture.seedActiveAgentRevision(namespace.id, agent.id);
+    const { page } = await newPage(t, fixture, { browser });
+    const requests = apiRequests(page, fixture.origin);
+    const preview = reply === "an incomplete preview";
+    const url = detailUrl(fixture, namespace.id, agent.id, revision.id, "policy");
+    await login(page, fixture, url.href);
+    await page.getByRole("button", { name: "Remove Network rules 1", exact: true }).click();
+    const refresh = page.getByRole("button", { name: "Refresh policy", exact: true });
+
+    // The operator removes the grant. Let the controller validate or commit that removal, then
+    // deliver an incomplete preview, or a well-formed save response still listing the old grant.
+    await page.route(fixture.origin + base + (preview ? "/validate" : ""), async (route) => {
+      if (route.request().method() !== (preview ? "POST" : "PUT")) {
+        return route.continue();
+      }
+      const response = await route.fetch();
+      assert.equal(response.status(), 200);
+      const { data, meta } = await response.json();
+      const actual = preview ? data.data : data;
+      assert.deepEqual(actual.additions, []);
+      if (!preview) {
+        assert.equal(await refresh.isDisabled(), true, "cannot start a refresh during the save");
+      }
+      const changed = preview ? { success: true, data: {} } : { ...actual, additions: [grant] };
+      await route.fulfill({ response, json: { data: changed, meta } });
+    });
+    const review = page.getByRole("button", { name: "Review changes", exact: true });
+    await review.click();
+    if (preview) {
+      await page
+        .getByRole("alert")
+        .filter({ hasText: "could not read the validated rules" })
+        .waitFor();
+      assert.equal(await page.getByRole("button", { name: "Save", exact: true }).count(), 0);
+      assert.equal(pathRequests(requests, "PUT", base).length, 0);
+      assert.equal(await review.isEnabled(), true);
+    } else {
+      // A refresh started before Save can still be delivering the previous version when Save
+      // finishes. Only the operator's subsequent refresh can resolve the uncertain outcome.
+      const policyUrl = fixture.origin + base;
+      const stale = await holdRequests(t, page, policyUrl, {
+        once: true,
+        method: "GET",
+        afterServer: true,
+      });
+      await refresh.click();
+      await stale.requested;
+      await page.getByRole("button", { name: "Save and apply to current revision" }).click();
+      const alert = page
+        .getByRole("alert")
+        .filter({ hasText: "could not confirm the saved rules" });
+      await alert.waitFor();
+
+      const delivered = page.waitForResponse(policyUrl);
+      stale.release();
+      const response = await delivered;
+      assert.equal(response.status(), 200);
+      assert.equal((await response.json()).data.policy.version, 2);
+      await nextFrames(page);
+      assert.equal(await alert.isVisible(), true, "a pre-save policy read cannot resolve the save");
+      assert.equal(await review.count(), 0);
+      assert.equal(
+        await page.getByRole("button", { name: "Apply saved policy to current revision" }).count(),
+        0,
+      );
+      await refresh.click();
+      await page.getByText(/Policy v3 reloaded/).waitFor();
+      assert.equal(pathRequests(requests, "PUT", base).length, 1);
+    }
+
+    const { policy } = (await fixture.request("GET", base)).data;
+    assert.equal(pathRequests(requests, "POST", base + "/apply").length, 0);
+    assert.equal(policy.application, undefined);
+    assert.equal(policy.version, preview ? 2 : 3);
+    assert.deepEqual(policy.additions, preview ? [grant] : []);
+  });
+}
