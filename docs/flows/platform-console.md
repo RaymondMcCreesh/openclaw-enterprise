@@ -153,7 +153,7 @@ after one second it says **Still checking…**. The Console retains up to 16 vie
 by route, Namespace, and session owner, excluding passwords and discovery state.
 An interrupted return preserves the view; an interrupted Refresh discards it.
 
-`apps/controller/src/console/api-client.mjs:createApiClient` keeps the abort signal
+`apps/controller/src/console/api-client.mts:createApiClient` keeps the abort signal
 through the response body. Cancellation preserves its reason; a socket failure is an interrupted read,
 not invalid JSON. Neither replays the request.
 
@@ -187,7 +187,7 @@ unavailable; selection never becomes an API query selector.
 Namespace checks, naming a known selection; retained-view reads do not extend this.
 `shell.mjs:createShell` listens for the 760px mobile breakpoint; widening closes
 the drawer without focusing its hidden toggle and releases `main.inert`.
-Empty lists show access guidance. `navigation.mjs:navigate` returns Agent detail/creation
+Empty lists show access guidance. `navigation.mts:navigate` returns Agent detail/creation
 to Agents; global pages remain open; recovered warnings disappear.
 
 ### 3. Authorize the selected page resource
@@ -203,7 +203,7 @@ Installation-wide collection. No readable selection means no Agent request.
 returning safe startup summaries. Empty configuration returns an empty list;
 missing wiring or failed dependencies return errors.
 
-`apps/controller/src/console/secrets.mjs:renderSecrets` lists metadata and reads
+`apps/controller/src/console/secrets.mts:renderSecrets` lists metadata and reads
 the exact Secret's `consumers` before showing actions. Agent IDs link to their
 pages; hidden counts and truncation remain visible. Known references disable
 Delete; the server rechecks references on submission. Create and replacement
@@ -219,7 +219,7 @@ status read after an uncertain delete; a denial never confirms removal.
 Replacement hands delivery to explicit Agent deployment or CredentialSource
 update under the [Secret delivery contract](../reference/drivers/kubernetes-secret.md#update-and-redeploy).
 
-`apps/controller/src/console/namespaces.mjs:renderNamespaces` sends Name-rule-valid names
+`apps/controller/src/console/namespaces.mts:renderNamespaces` sends Name-rule-valid names
 through tracked `POST /namespaces`; `OpenClawController.createNamespace` authorizes
 each attempt, queues provisioning; `perform` audits. Open Agents needs the Namespace
 relisted. Closing refocuses the opener; a 403 disables it per account, across
