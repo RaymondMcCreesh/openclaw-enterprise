@@ -15,6 +15,25 @@ then follow the [upgrade checklist](upgrade-checklist.md) and
 Entries are newest first. Steps marked _untested_ have not been run against a
 real Installation.
 
+## 2026-10-23: Installation listeners must match the chart
+
+**What breaks.** API and worker startup and the chart's upgrade check refuse an
+Installation listener that the chart Service cannot reach. That is
+`drivers.credential_proxy.configuration.authority` or
+`repository.openShell.authority` on another port than Helm
+`egressAuthority.port` or `openshellGit.port`, on a host other than `0.0.0.0`
+or `::`, or with that chart listener disabled. Earlier builds started, or failed
+to bind, and then refused every protected request or Git call at first use.
+
+**Who is affected.** Helm installs with a Credential Proxy authority or
+protected OpenShell Git.
+
+**How to tell.** The upgrade check or the `startup-error` log shows
+`CHART_LISTENER_MISMATCH` with the Installation and Helm settings and values.
+
+**Steps.** Set the authority `host` to `0.0.0.0` and its `port` to the Helm
+value, or enable the chart listener, then upgrade again.
+
 ## 2026-10-23: a repository broker peer needs the native sender
 
 **What breaks.** Startup and the chart's upgrade check refuse an Installation
