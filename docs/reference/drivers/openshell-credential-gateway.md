@@ -24,13 +24,14 @@ backend:
     configuration:
       endpoint: https://openshell-gateway.openshell-system.svc:8080
       auth:
-        mode: bearerTokenFile
-        path: /etc/openclaw/openshell/token
+        mode: mtls
+        certificatePath: /etc/openclaw/openshell/tls.crt
+        privateKeyPath: /etc/openclaw/openshell/tls.key
       rootCertificatePath: /etc/openclaw/openshell/ca.crt
     drivers:
       sandbox: openshell-sandbox
       credential_gateway: openshell-credentials
-      credential_refresh: openshell-refresh # enables OAuth2 and Codex device types
+      credential_refresh: openshell-refresh # enables OAuth2; Codex also needs operatorTls
 drivers:
   sandbox:
     id: openshell-sandbox
