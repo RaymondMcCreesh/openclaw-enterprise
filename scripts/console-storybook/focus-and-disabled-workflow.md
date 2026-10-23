@@ -66,6 +66,9 @@ follows `:focus-visible`. No part of any ring may be cut off.
     hover. **View admitted native configuration** is dark and underlined, not
     accent, and still opens the JSON. In **Components / Dialogs / Plugins
     (wide)**, **Access and credential setup** looks the same.
+14. Open **Components / Native admin / Refreshing access**. Tab to **Refresh
+    access** and press Enter: while it reads (1.5 s) it keeps focus. Repeat and
+    press Tab during the read: focus stays where you moved it.
 
 15. Open **Components / Credentials / Scrolling Secret list**. Click **API key
     Secret**: the list scrolls. Press Tab: the list closes and focus moves to
