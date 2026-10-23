@@ -3988,6 +3988,48 @@ export class ControllerWorker {
     }
   }
 
+  /**
+   * A withdrawal recorded on a revision that was not yet the Agent's active one (a candidate
+   * still deploying) is refused with CREDENTIAL_WITHDRAWAL_REQUIRES_RUNTIME_RETIREMENT, which
+   * awaits a replay (finding 2235). Once that revision's deployment activates it, the same
+   * attempt can reduce its policy, so the transaction that completes the deployment queues one
+   * attempt (finding 2242). That attempt takes the ordinary path: it rechecks each requester,
+   * and only a confirmed reduction marks a withdrawal revoked. Only the deployment claim calls
+   * this, and that claim completes once in this transaction, so it runs once per revision; the
+   * fixed key names the attempt, and none is queued beside an outstanding attempt. A proxy or
+   * plan that cannot reduce in place refuses with the same reason, so its candidate gets one
+   * more refused attempt (and failure audit) on activation, not a chain.
+   */
+  private async queueActivatedRevisionWithdrawal(
+    unit: PlatformUnitOfWork,
+    revision: Readonly<AgentRevision>,
+  ): Promise<void> {
+    const refused = (
+      await unit.credentialSources.listCredentialWithdrawals(revision.namespaceId, revision.id)
+    ).find(
+      ({ state, lastReason }) =>
+        state === "pending" && lastReason === CREDENTIAL_WITHDRAWAL_REQUIRES_RUNTIME_RETIREMENT,
+    );
+    if (
+      refused === undefined ||
+      (await unit.operations.hasOutstandingCredentialWithdrawalWork(
+        revision.namespaceId,
+        revision.id,
+      ))
+    ) {
+      return;
+    }
+    await unit.operations.append({
+      kind: "agent_revision",
+      action: "reconcile",
+      target: CREDENTIAL_WITHDRAWAL_TARGET,
+      namespaceId: revision.namespaceId,
+      resourceId: revision.id,
+      actorId: refused.requestedBy,
+      operationId: "activation",
+    });
+  }
+
   private beginDeployPass(claim: ClaimedWork): void {
     // Maintenance, cleanup and stop work are not deployments.
     if (claim.idempotencyKey !== `agent_revision:${claim.revisionId}:reconcile`) {
@@ -6303,6 +6345,9 @@ export class ControllerWorker {
         await unit.workspaceSetups.complete(revision.namespaceId, revision.agentId, setup.id);
       }
       await this.appendRevisionObservation(unit, claim, result);
+      if (isCandidateDeployment(claim)) {
+        await this.queueActivatedRevisionWithdrawal(unit, revision);
+      }
       await queue.complete(claim, {
         code: result.code,
         ...(result.resultData === undefined ? {} : { resultData: result.resultData }),
