@@ -59,6 +59,7 @@ import {
   withYieldingComputeStop,
   withYieldingGatewayDrain,
 } from "../../apps/controller/src/drivers/compute/operation-context.ts";
+import { assertCleanupFailure } from "../helpers/compute-cleanup-failure.mjs";
 import { createHarnessConfiguration } from "../helpers/harness-configuration.mjs";
 import { syntheticCredentialUrl } from "../fixtures/synthetic-credential-url.mjs";
 import { harnessTlsFixture } from "../helpers/harness-tls.mjs";
@@ -19709,6 +19710,84 @@ test("ordinary network profile selectors remain detached across caller results",
   const second = runtime(driver.agentNetworkPolicies(revision, execution));
   assert.equal(second.spec.podSelector.matchLabels[ORDINARY_PROFILE_LABEL], ORDINARY_PROFILE);
   assert.equal(second.spec.podSelector.matchLabels["openclaw.dev/agent"], revision.agentId);
+});
+
+// Finding 2268: when preparation or activation fails after the lifecycle start and the lifecycle
+// cleanup fails too, the operation's own failure stays first, so the worker classifies the
+// deployment by it. Activation used to throw the cleanup failure in its place. A Kubernetes API
+// outage inside stays transient, as it does alone, so the worker keeps waiting for it.
+test("Kubernetes preparation and activation keep their own failure first when the lifecycle cleanup also fails", async () => {
+  let started = false;
+  let cleanups = 0;
+  // Embedded: its preparation starts the lifecycle before any write, and activating a successor
+  // moves the Agent's Gateway to it, which starts the lifecycle again.
+  const { driver, revision, state, context } = workspaceSetupFixture(
+    true,
+    true,
+    undefined,
+    {},
+    {
+      lifecycleDrivers: [
+        {
+          id: "hooks",
+          capability: "configuration",
+          implementation: "test",
+          computeLifecycleHooks: {
+            async beforeWorkloadStart() {
+              started = true;
+            },
+            async beforeWorkloadStop() {
+              cleanups += 1;
+              throw new Error("lifecycle cleanup refused");
+            },
+          },
+        },
+      ],
+    },
+  );
+  const fullContext = { ...context, ...authContext(revision) };
+  const reconcile = driver.reconcile.bind(driver);
+  let outage;
+  driver.reconcile = async (...args) => {
+    if (started && outage !== undefined) {
+      throw outage;
+    }
+    return reconcile(...args);
+  };
+  const failure = (operation) =>
+    operation.then(
+      () => assert.fail("the operation must fail"),
+      (error) => error,
+    );
+
+  outage = Object.assign(new Error("Service Unavailable"), { code: 503 });
+  const prepared = await failure(driver.prepareRevision(revision, fullContext));
+  assertCleanupFailure(prepared, /HTTP 503/, [/lifecycle hook beforeWorkloadStop failed/]);
+  assert.ok(prepared.primary instanceof TransientDependencyError);
+  assert.equal(prepared.primary.dependency, "kubernetes_api");
+  assert.equal(prepared.primary.cause, outage);
+  assert.equal(cleanups, 1);
+
+  outage = undefined;
+  state.ready = true;
+  await prepareUntilReady(driver, revision, fullContext);
+  await driver.activateRevision(revision, fullContext);
+  const successor = { ...revision, id: "cleanup-successor", revision: revision.revision + 1 };
+  const successorContext = { ...context, ...authContext(successor) };
+  started = false;
+  outage = new ActivationFailedError("AGENT_GATEWAY_UNAUTHORIZED", "The Gateway refused.");
+  const activated = await failure(driver.activateRevision(successor, successorContext));
+  assertCleanupFailure(activated, outage, [/lifecycle hook beforeWorkloadStop failed/]);
+  assert.equal(cleanups, 2);
+
+  // An API outage in activation stays transient too.
+  started = false;
+  outage = Object.assign(new Error("Service Unavailable"), { code: 503 });
+  const unavailable = await failure(driver.activateRevision(successor, successorContext));
+  assertCleanupFailure(unavailable, /HTTP 503/, [/lifecycle hook beforeWorkloadStop failed/]);
+  assert.ok(unavailable.primary instanceof TransientDependencyError);
+  assert.equal(unavailable.primary.cause, outage);
+  assert.equal(cleanups, 3);
 });
 
 // Returns how many preparation passes the revision needed to become ready.
