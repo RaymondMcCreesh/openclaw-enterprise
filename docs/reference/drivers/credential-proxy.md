@@ -184,6 +184,25 @@ Online request authorization does not establish exact dispatch or response
 custody. Those stronger guarantees require the actual enforcing sender and
 response transport. See [qualification requirements](../../testing/protected-repository-custody.md).
 
+### Request-time capacity
+
+The OCC [request registry](../../../packages/occ/src/credential-proxy.ts) keeps
+its bounds in memory, per API process:
+
+| Bound                      | Limit                         | Released                                                                                           |
+| -------------------------- | ----------------------------- | -------------------------------------------------------------------------------------------------- |
+| Operations in progress     | 1024                          | When the handle closes or expires and no authentication, policy, Secret or receipt work is pending |
+| Request IDs, all Sandboxes | 8192                          | 30 s after each ID's UUIDv7 creation time                                                          |
+| Request IDs, per Sandbox   | 2048 (a quarter of the table) | Same                                                                                               |
+
+The ID bounds allow about 270 protected requests per second per API process, and
+about 68 per Sandbox. One Sandbox cannot use the whole table, but four busy Sandboxes
+can. A request refused by the installation or route checks reserves no ID. From exchange
+capture on, its ID stays reserved for the whole window, even if the request is refused.
+Past any bound, `resolve` refuses with `unavailable`/`resolver`. The bundled
+OpenShell authority also admits at most 1024 pending exchange openings and 1024
+accepted exchanges.
+
 ## Troubleshooting
 
 - No wiring evidence: inspect the authenticated counterpart and exact plan; do
