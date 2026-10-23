@@ -38,6 +38,7 @@ import {
   PostgresOpenShellGitRouteStore,
 } from "./openshell-git-route-store.ts";
 import {
+  deleteOpenShellPreparedGitProvider,
   OpenShellPreparedGitProvider,
   OpenShellPreparedGitProviderError,
   type OpenShellPreparedGitBinding,
@@ -1161,6 +1162,53 @@ export class OpenShellGitRuntime {
           check,
         }),
     );
+  }
+
+  /**
+   * Deletes the revision's Git provider and its profile (finding 2206). The Sandbox Driver calls
+   * this only after withdraw() and after OpenShell confirms the revision's Sandbox gone, so no
+   * route can use the provider again: in this process the entry is blocked, and adoption by any
+   * other worker finds neither the Sandbox nor the provider (the store's tombstone, written best
+   * effort, refuses it earlier). (Without a route store, which only the
+   * unprotected git-write path lacks, a restarted worker asked to prepare the revision again
+   * starts a new bootstrap with every admission check, as a first preparation does.) The name
+   * derives from the revision's own scope, as at preparation, so a restarted worker finds
+   * it too. `attached`, the Sandbox's provider list read before its deletion, names it when the
+   * scope no longer resolves (its grant or standing approval was withdrawn, often the reason the
+   * revision stopped) or derives another name (an upgrade changed the scope's inputs). A
+   * provider neither names (an earlier pass deleted the Sandbox, or the Sandbox detached it at
+   * expiry) is left to Namespace cleanup.
+   */
+  async removeProvider(
+    revision: Readonly<AgentRevision>,
+    client: OpenShellGatewayClient,
+    workspace: string,
+    sandbox: string,
+    attached: readonly string[],
+    signal: AbortSignal,
+  ): Promise<void> {
+    let delivery: OpenShellPreparedGitDelivery | undefined;
+    try {
+      delivery = this.scope(revision).delivery;
+    } catch {
+      delivery = undefined;
+    }
+    if (delivery !== undefined) {
+      const current = await client.getWorkspace(workspace, signal);
+      if (current?.id) {
+        await gitProvider(client, workspace, current.id, sandbox, revision.id, delivery).remove(
+          signal,
+        );
+      }
+    }
+    // The derived provider is gone by now, so this finds only another prepared Git provider the
+    // Sandbox attached; deleteOpenShellPreparedGitProvider skips every provider that is not one.
+    for (const name of attached) {
+      const provider = await client.getProvider(workspace, name, signal);
+      if (provider !== undefined) {
+        await deleteOpenShellPreparedGitProvider(client, workspace, provider, signal);
+      }
+    }
   }
 
   withdraw(revisionId: string): void {
