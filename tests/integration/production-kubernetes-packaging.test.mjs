@@ -176,6 +176,70 @@ try {
   };
 }
 
+test("execution peer label maps reject non-string values before rendering", tooling, async () => {
+  const renderExecution = (field, value, option = "--set-json") =>
+    execute(
+      helm,
+      [
+        "template",
+        "oce",
+        "deploy/helm/openclaw-execution",
+        "--set",
+        "routing.hostname=agents.example.invalid",
+        "--set",
+        "routing.gatewayClassName=private-envoy-gateway",
+        "--set",
+        "routing.tlsSecretName=agents-tls",
+        "--set",
+        "routing.controlPlaneCidrs[0]=198.51.100.0/24",
+        ...(field === undefined ? [] : [option, `${field}=${value}`]),
+      ],
+      { cwd: repository, maxBuffer: 2_000_000 },
+    );
+  const defaults = await resources((await renderExecution()).stdout);
+  const defaultPolicy = defaults.find(({ kind }) => kind === "NetworkPolicy");
+  for (const [field, peer] of [
+    ["dns.podLabels", 0],
+    ["routing.envoyGatewayPodLabels", 2],
+  ]) {
+    for (const value of [
+      "true",
+      "31",
+      "[]",
+      '"text"',
+      '{"probe":true}',
+      '{"probe":31}',
+      '{"probe":[]}',
+      '{"probe":{}}',
+    ]) {
+      await assert.rejects(renderExecution(field, value), ({ stderr }) => stderr.includes(field));
+    }
+    for (const value of [
+      '{"probe":"true"}',
+      '{"probe":"31"}',
+      '{"probe":""}',
+      '{"probe":null}',
+      "{}",
+      "null",
+    ]) {
+      const objects = await resources((await renderExecution(field, value)).stdout);
+      const policy = objects.find(({ kind }) => kind === "NetworkPolicy");
+      const labels = policy.spec.egress[peer].to[0].podSelector.matchLabels;
+      const requested = JSON.parse(value);
+      const defaultLabels = defaultPolicy.spec.egress[peer].to[0].podSelector.matchLabels;
+      assert.deepEqual(labels, requested === null ? null : { ...defaultLabels, ...requested });
+    }
+    const quoted = await resources(
+      (await renderExecution(`${field}.probe`, "true", "--set-string")).stdout,
+    );
+    const quotedPolicy = quoted.find(({ kind }) => kind === "NetworkPolicy");
+    assert.deepEqual(quotedPolicy.spec.egress[peer].to[0].podSelector.matchLabels, {
+      ...defaultPolicy.spec.egress[peer].to[0].podSelector.matchLabels,
+      probe: "true",
+    });
+  }
+});
+
 test(
   "Helm DNS grants preserve configured peers and admit OpenShift backend ports",
   tooling,
