@@ -45,6 +45,9 @@ Installation listener that the chart Service cannot reach. That is
 `egressAuthority.port` or `openshellGit.port`, on a host other than `0.0.0.0`
 or `::`, or with that chart listener disabled. Earlier builds started, or failed
 to bind, and then refused every protected request or Git call at first use.
+Since 2026-10-23 the check also refuses TLS or issuer file paths other than
+where the chart mounts them; a Recreate upgrade with such a path left the API
+or worker unable to start after the old Pod stopped.
 
 **Who is affected.** Helm installs with a Credential Proxy authority or
 protected OpenShell Git.
@@ -53,7 +56,8 @@ protected OpenShell Git.
 `CHART_LISTENER_MISMATCH` with the Installation and Helm settings and values.
 
 **Steps.** Set the authority `host` to `0.0.0.0` and its `port` to the Helm
-value, or enable the chart listener, then upgrade again.
+value, or enable the chart listener. Set `certificatePath`, `privateKeyPath`
+and `issuerPublicKeyPath` to the paths the refusal names. Then upgrade again.
 
 ## 2026-10-23: a repository broker peer needs the native sender
 
