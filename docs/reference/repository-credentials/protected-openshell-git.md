@@ -177,6 +177,14 @@ for profile-specific allowed/denied requests and the required model-source choic
 
 ## Use the admitted repository
 
+With repository scope, clone, fetch and push exactly
+`https://github.com/$OCE_OPENSHELL_GIT_REPOSITORY.git`: the lowercase name OCE
+gives the Sandbox, with `.git`. Git and OpenShell match the credential path
+case-sensitively, so GitHub's mixed-case spelling, such as
+`https://github.com/Acme/Widgets.git`, or the URL without `.git` gets no
+credential, and Git fails, for example with `could not read Username` or
+`The requested URL returned error: 403`.
+
 [OCC access rules](../../flows/agent-repository-credentials.md) own grant lifetime
 and standing approval. Access is finite unless separately approved as standing;
 each token and session still expires. Remove standing approval with its current
