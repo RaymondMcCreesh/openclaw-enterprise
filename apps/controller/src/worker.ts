@@ -4489,7 +4489,12 @@ export class ControllerWorker {
           // claim's chain too: the revision cannot activate without a new one.
           if (
             error instanceof ActivationFailedError ||
-            error instanceof CredentialSourceRevisionError
+            error instanceof CredentialSourceRevisionError ||
+            // Finding 2265: a 403 on a private Secret write fails the deployment at once here as
+            // in preparation (finding 1770). A maintenance pass keeps the running revision's
+            // chain instead, as for an outage: it recovers once an operator fixes the grant.
+            (error instanceof KubernetesSecretWriteForbiddenError &&
+              !claim.idempotencyKey.startsWith(`agent_revision:${revision.id}:maintenance:`))
           ) {
             await this.finalizeRevision(
               claim,
@@ -5753,8 +5758,8 @@ export class ControllerWorker {
     // OCC refused this candidate (its authority, credentials or configuration), so its runtime
     // must not keep serving. A runtime that failed by itself (a held startup failure, the
     // convergence deadline, exhausted retries) stays for diagnosis on its version's Logs tab.
-    // ActivationFailedError also lands here, but no bundled Driver activates before commit, so
-    // it only reaches a published (active) revision, which the stop skips.
+    // A permanent activation failure also lands here, but no bundled Driver activates before
+    // commit, so it only reaches a published (active) revision, which the stop skips.
     if (
       resolved.outcome === "permanent" &&
       heldFailureCode === undefined &&
@@ -5974,7 +5979,8 @@ export class ControllerWorker {
         }
         await this.finalizeRevision(
           claim,
-          error instanceof ActivationFailedError
+          error instanceof ActivationFailedError ||
+            error instanceof KubernetesSecretWriteForbiddenError
             ? { outcome: "permanent", code: error.code }
             : activationPendingResult(error),
           revisionFailureLogFields(error),
