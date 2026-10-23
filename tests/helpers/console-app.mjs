@@ -16,6 +16,7 @@ import { backendSummariesFromDefinitions } from "../../apps/controller/src/compo
 import { resolveApprovedHarness } from "../../apps/controller/src/composition/production-harness.ts";
 import { createFastifyApp } from "../../apps/controller/src/index.ts";
 import { InMemoryAuditSink } from "../../packages/audit/src/index.ts";
+import { NAME_MAX_CHARACTERS } from "../../packages/contracts/src/api/plain-text.ts";
 import { NativeIAMDriver } from "../../packages/iam/src/index.ts";
 import { InMemoryPlatformState, OpenClawController } from "../../packages/occ/src/index.ts";
 import { authenticatedHeaders, signInWithEmailPassword } from "./auth-session.mjs";
@@ -85,6 +86,13 @@ function computeDriver({
     },
     async retireRevision() {},
   });
+}
+
+// The default model credential Secret's name for createAgent. An Agent name may use all of the
+// Name rule's characters, so "Auth <Agent name>" is cut to that length (in code points); the cut
+// can land after a space, which a Name cannot end with.
+function authSecretName(agentName) {
+  return Array.from(`Auth ${agentName}`).slice(0, NAME_MAX_CHARACTERS).join("").trimEnd();
 }
 
 function spkiHash(cert) {
@@ -743,7 +751,7 @@ export async function createConsoleAppFixture(t, options = {}) {
         ? {
             method: "api_key",
             source: (
-              await createSecret(namespaceId, `Auth ${name}`, `test-api-key-${randomUUID()}`)
+              await createSecret(namespaceId, authSecretName(name), `test-api-key-${randomUUID()}`)
             ).ref,
           }
         : (options.harnessAuth ?? null);
