@@ -147,8 +147,7 @@ const adminCredentials = Object.freeze({
   email: "admin-openshell-sandboxdriver@example.test",
   password: "openshell-sandboxdriver-admin-password",
 });
-// OpenShell reserves /run for its control files; keep the read-only test bridge outside it.
-const credentialMountPath = "/enterprise-credentials";
+const credentialMountPath = "/run/enterprise-credentials";
 const pluginRuntimeMountPath = "/etc/openclaw/plugin-runtime";
 const runtimeAssetsMountPath = "/home/node/openclaw-runtime-assets";
 const nativeTemporaryMountPath = "/tmp/openclaw-native-worker";
@@ -945,8 +944,12 @@ function credentialBridgeResource(context, claimName, subPath) {
       nativeTemporaryMountPath,
     );
   }
-  const nodeSetupCode = optionalSecretEnvironment(context.requirements, "OPENCLAW_NODE_SETUP_CODE");
-  const nodeCa = literalEnvironment(context.requirements, "OPENCLAW_NODE_CA_PEM");
+  const nodeSetupCode = needsNativeTemporary
+    ? undefined
+    : optionalSecretEnvironment(context.requirements, "OPENCLAW_NODE_SETUP_CODE");
+  const nodeCa = needsNativeTemporary
+    ? undefined
+    : literalEnvironment(context.requirements, "OPENCLAW_NODE_CA_PEM");
   return {
     apiVersion: "batch/v1",
     kind: "Job",
@@ -1024,7 +1027,9 @@ function credentialBridgeResource(context, claimName, subPath) {
                     : [
                         'printf "%s" "$OPENCLAW_NODE_SETUP_CODE" > /bootstrap/openclaw-node-setup-code',
                       ]),
-                  'printf "%s" "$OPENCLAW_NODE_CA_PEM" > /bootstrap/openclaw-node-ca.pem',
+                  ...(nodeCa === undefined
+                    ? []
+                    : ['printf "%s" "$OPENCLAW_NODE_CA_PEM" > /bootstrap/openclaw-node-ca.pem']),
                   ...(needsPluginRuntime
                     ? [
                         "cp /source-plugin-runtime/runtime.json /bootstrap/plugin-runtime/runtime.json",
@@ -1038,7 +1043,7 @@ function credentialBridgeResource(context, claimName, subPath) {
                   ...(nodeSetupCode === undefined
                     ? []
                     : ["chmod 0444 /bootstrap/openclaw-node-setup-code"]),
-                  "chmod 0444 /bootstrap/openclaw-node-ca.pem",
+                  ...(nodeCa === undefined ? [] : ["chmod 0444 /bootstrap/openclaw-node-ca.pem"]),
                   ...(needsPluginRuntime
                     ? [
                         "chmod 0444 /bootstrap/plugin-runtime/runtime.json /bootstrap/plugin-runtime/config.toml",
@@ -1055,7 +1060,7 @@ function credentialBridgeResource(context, claimName, subPath) {
               env: [
                 ...(appServerToken === undefined ? [] : [appServerToken]),
                 ...(nodeSetupCode === undefined ? [] : [nodeSetupCode]),
-                nodeCa,
+                ...(nodeCa === undefined ? [] : [nodeCa]),
               ],
               volumeMounts: [
                 { name: "bootstrap", mountPath: "/bootstrap", subPath },
@@ -1255,12 +1260,16 @@ function bridgeRequirements(context, claimName, subPath) {
       : [
           `process.env.APP_SERVER_TOKEN = require("node:fs").readFileSync("${credentialMountPath}/app-server-token", "utf8");`,
         ]),
-    ...(nodeSetupCode === undefined
+    ...(nodeSetupCode === undefined || needsNativeTemporary
       ? []
       : [
           `process.env.OPENCLAW_NODE_SETUP_CODE = require("node:fs").readFileSync("${credentialMountPath}/openclaw-node-setup-code", "utf8");`,
         ]),
-    `process.env.OPENCLAW_NODE_CA_PEM = require("node:fs").readFileSync("${credentialMountPath}/openclaw-node-ca.pem", "utf8");`,
+    ...(needsNativeTemporary
+      ? []
+      : [
+          `process.env.OPENCLAW_NODE_CA_PEM = require("node:fs").readFileSync("${credentialMountPath}/openclaw-node-ca.pem", "utf8");`,
+        ]),
   ].join("\n");
   const runtimeCommand = structuredClone(context.requirements.command);
   const programIndex = inlineNodeProgramIndex(runtimeCommand);
@@ -1277,7 +1286,9 @@ function bridgeRequirements(context, claimName, subPath) {
   const environment = context.requirements.environment
     .filter(
       ({ name }) =>
-        !["APP_SERVER_TOKEN", "OPENCLAW_NODE_SETUP_CODE", "OPENCLAW_NODE_CA_PEM"].includes(name),
+        name !== "APP_SERVER_TOKEN" &&
+        (needsNativeTemporary ||
+          !["OPENCLAW_NODE_SETUP_CODE", "OPENCLAW_NODE_CA_PEM"].includes(name)),
     )
     .map((entry) => {
       if (entry.name === "HOME") {
@@ -1317,7 +1328,11 @@ function bridgeRequirements(context, claimName, subPath) {
         mountPath: effectiveNodeStateMountPath,
         readOnly: false,
       },
-      { claimName, subPath, mountPath: credentialMountPath, readOnly: true },
+      // Native enrollment uses the real Driver's provider-managed files, so it needs
+      // no duplicate bootstrap mount in OpenShell's reserved /run control directory.
+      ...(needsNativeTemporary
+        ? []
+        : [{ claimName, subPath, mountPath: credentialMountPath, readOnly: true }]),
       ...(needsPluginRuntime
         ? [
             {
