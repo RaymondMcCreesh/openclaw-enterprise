@@ -50,6 +50,17 @@ const restorations = (f) =>
 const warnings = (f) =>
   f.events.filter((event) => event.event === "worker.openshell-git-route-warning");
 const retained = (f) => warnings(f).filter((event) => event.status === "retained");
+// Each Git expiry pass logs the revision identity, its outcome and step, and for a pending
+// pass one constant failure. Nothing else: no error text, Sandbox name or gateway detail.
+const expiries = (f) => {
+  const events = f.events.filter((event) => event.event === "worker.openshell-git-expiry");
+  const identity = ["event", "namespaceId", "agentId", "revisionId", "repositoryRef"];
+  for (const event of events) {
+    const fields = ["outcome", "check", ...(event.outcome === "pending" ? ["failure"] : [])];
+    assert.deepEqual(Object.keys(event).sort(), [...identity, ...fields].sort());
+  }
+  return events;
+};
 
 async function expectDenied(f, reason, message) {
   assert.equal(await f.lookup(), undefined, message);
@@ -1814,6 +1825,8 @@ test("Git expiry observes the original model in the reduced stock installation, 
     let expiry = false;
     let state = "";
     let trace = [];
+    // Each cleanup pass's own signal, so a fault can abort the pass it runs in.
+    let pass;
     const owner = { model, workload: async () => "original-pod-and-container" };
     await f.runtime.bind(r.id, entry.verify, owner);
     const original = f.provider.observe;
@@ -2000,6 +2013,12 @@ test("Git expiry observes the original model in the reduced stock installation, 
         // The send never reached the gateway: still attached, nothing admitted.
         throw Object.assign(Error("connection refused"), { grpcStatus: 14 });
       }
+      if (sends === 1 && fault === "pass ran out of time") {
+        // The pass's deadline fires during the send, which rejects with the signal's reason
+        // before it left: nothing admitted.
+        pass.abort(new DOMException("The operation was aborted due to timeout", "TimeoutError"));
+        throw pass.signal.reason;
+      }
       if (fault === "Sandbox moved before send") {
         box.resourceVersion = "14";
       }
@@ -2025,21 +2044,42 @@ test("Git expiry observes the original model in the reduced stock installation, 
     f.revision.repositoryCredentials.deadlineWallMs = Date.now() - 1;
     await f.reconcile();
     assert.equal(await f.lookup(), undefined, "Git denied at its own deadline before withdrawal");
-    const cleanup = (runtime, observer = owner) =>
-      runtime.retireExpiredRepositoryAccess(
+    const cleanup = (runtime, observer = owner) => {
+      pass = new AbortController();
+      return runtime.retireExpiredRepositoryAccess(
         r,
         client,
         box.workspace,
         box.name,
         observer,
-        AbortSignal.timeout(5_000),
+        AbortSignal.any([pass.signal, AbortSignal.timeout(5_000)]),
       );
+    };
     const first = await cleanup(
       f.runtime,
       fault === "replacement Pod" ? { ...owner, workload: async () => "other-pod" } : owner,
     );
     assert.equal(first, expectedFirst, fault);
+    // Every pending pass says why, from the fixed set (finding 2230).
+    const failures = () =>
+      expiries(f)
+        .filter((event) => event.outcome === "pending")
+        .map((event) => event.failure);
+    const expectedFailures =
+      {
+        "version churn": ["unconfirmed"],
+        "lost reply": ["failed"],
+        "intent without effect": ["gateway_unavailable"],
+        "outcome uncertain at gateway": ["timeout"],
+        "first send still applying": ["timeout"],
+        "pass ran out of time": ["timeout"],
+        "admission limit": ["admission_limit", "admission_limit"],
+        "Sandbox moved after intent": ["gateway_unavailable"],
+        "profile unavailable": ["gateway_unavailable"],
+        "model rotates during profile check": ["unconfirmed"],
+      }[fault] ?? [];
     if (expectedFirst === "retire-runtime") {
+      assert.deepEqual(failures(), expectedFailures);
       if (["replacement Pod", "Git profile scope changed"].includes(fault)) {
         assert.equal(sends, 0);
       }
@@ -2072,21 +2112,21 @@ test("Git expiry observes the original model in the reduced stock installation, 
       // detach pending and logged, Git still fenced; the next pass after slots free converges
       // (finding 2228).
       assert.deepEqual(
-        f.events
-          .filter((event) => event.event === "worker.openshell-git-expiry")
-          .map(({ outcome, check }) => [outcome, check]),
+        expiries(f).map(({ outcome, check, failure }) => [outcome, check, failure]),
         [
-          ["pending", "conditional-detach"],
-          ["pending", "repeated-conditional-detach"],
-          ["withdrawn", "record-reduced-generation"],
+          ["pending", "conditional-detach", "admission_limit"],
+          ["pending", "repeated-conditional-detach", "admission_limit"],
+          ["withdrawn", "record-reduced-generation", undefined],
         ],
       );
     }
     // A detach that took effect is observed, never sent again. An intent that left the provider
     // attached is sent again as the same request until it converges (finding 2219): withdrawn,
     // or the runtime retired when the gateway cannot tell the outcome or the Sandbox moved.
+    assert.deepEqual(failures(), expectedFailures);
     const repeated = {
       "intent without effect": 2,
+      "pass ran out of time": 2,
       "outcome uncertain at gateway": 3,
       "first send still applying": 2,
       "admission limit": 3,
@@ -2102,6 +2142,7 @@ test("Git expiry observes the original model in the reduced stock installation, 
     ["lost reply", "pending"],
     ["pending", "withdrawn"],
     ["intent without effect", "pending", "withdrawn"],
+    ["pass ran out of time", "pending", "withdrawn"],
     ["outcome uncertain at gateway", "pending", "retire-runtime"],
     ["first send still applying", "pending", "withdrawn"],
     ["admission limit", "pending", ["pending", "withdrawn"]],
