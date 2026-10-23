@@ -13,6 +13,9 @@ import { InMemoryPlatformState } from "../../packages/occ/src/state/platform-sta
 import { OpenShellEgressIdentity } from "../../apps/controller/src/drivers/egress-proxy/openshell-identity.ts";
 import {
   CredentialProxy,
+  OPERATION_AUTHENTICATION_BUDGET,
+  OPERATION_CAPACITY,
+  OPERATION_SANDBOX_SHARE,
   REPLAY_SANDBOX_SHARE,
   REPLAY_TABLE_CAPACITY,
   STREAM_LEASE_CEILING_MS,
@@ -1585,53 +1588,49 @@ test("credential proxy rejects an oversized body before copying request fields",
   assert.equal(f.reads, 0);
 });
 
+const saturated = { kind: "refused", error: { kind: "unavailable", code: "resolver" } };
+
 test("in-flight Secret selection and outstanding handles consume the same bounded capacity", async (t) => {
   // Exercise the actual 1024-slot registry, not a race to finish 1024 TLS handshakes,
   // native IAM checks and Kubernetes reads inside their intentionally short deadlines.
   const f = await syntheticDispatchFixture(t);
-  const ids = new Set();
   let reads = 0;
-  const full = Promise.withResolvers();
+  let target = 0;
+  let filled;
   const gate = Promise.withResolvers();
-  const forwarder = new CredentialProxy({
-    ...f.ports,
-    exchangeOwner: {
-      verify: f.ports.exchangeOwner.verify,
-      capture: (use) => {
-        ids.add(use.id);
-        return { ...f.association, responseId: use.id };
-      },
-      owns: (value, use) => ids.has(use.id) && value.responseId === use.id,
-    },
-    read: async (...args) => {
-      if (++reads === 1024) {
-        full.resolve();
+  const s = f.sandboxes((ports) => ({
+    ...ports,
+    async read(...args) {
+      if (++reads === target) {
+        filled.resolve();
       }
       await gate.promise;
-      return f.ports.read(...args);
+      return ports.read(...args);
     },
-  });
-  const use = (signal) =>
-    forwarder.resolve(
-      "synthetic-peer",
-      f.association.installation.sandboxId,
-      { ...f.request, id: requestId(f.ports.now()) },
-      signal,
-    );
+  }));
   const first = new AbortController();
   const other = new AbortController().signal;
-  const pending = Array.from({ length: 1024 }, (_, i) => use(i === 0 ? first.signal : other));
-  await full.promise;
-  const saturated = { kind: "refused", error: { kind: "unavailable", code: "resolver" } };
+  // Four Sandboxes fill their shares; each burst exactly fits the authentication budget.
+  assert.equal(OPERATION_SANDBOX_SHARE * 4, OPERATION_CAPACITY);
+  assert.equal(OPERATION_AUTHENTICATION_BUDGET, OPERATION_SANDBOX_SHARE);
+  const pending = [];
+  for (const name of ["a", "b", "c", "d"]) {
+    filled = Promise.withResolvers();
+    target += OPERATION_SANDBOX_SHARE;
+    for (let i = 0; i < OPERATION_SANDBOX_SHARE; i += 1) {
+      pending.push(s.resolve(name, undefined, pending.length === 0 ? first.signal : other));
+    }
+    await filled.promise;
+  }
   assert.deepEqual(
-    await use(other),
+    await s.resolve("e", undefined, other),
     saturated,
     "pending selection is charged before material returns",
   );
   assert.deepEqual(
-    await forwarder.resolve(
-      "synthetic-peer",
-      f.association.installation.sandboxId,
+    await s.proxy.resolve(
+      "e",
+      "unauthenticated-sandbox",
       {
         ...f.request,
         get headers() {
@@ -1642,17 +1641,188 @@ test("in-flight Secret selection and outstanding handles consume the same bounde
     ),
     saturated,
   );
-  assert.equal(reads, 1024, "the excess resolution never starts selection");
+  assert.equal(reads, OPERATION_CAPACITY, "the excess resolution never starts selection");
   gate.resolve();
   assert.ok((await Promise.all(pending)).every((decision) => decision.kind === "ready"));
-  assert.deepEqual(await use(other), saturated, "ready handles remain charged");
+  assert.deepEqual(
+    await s.resolve("e", undefined, other),
+    saturated,
+    "ready handles remain charged",
+  );
   first.abort();
   assert.equal(
-    (await use(other)).kind,
+    (await s.resolve("e", undefined, other)).kind,
     "ready",
     "closing the owning sender frees exactly its slot",
   );
-  assert.deepEqual(await use(other), saturated);
+  assert.deepEqual(await s.resolve("e", undefined, other), saturated);
+});
+
+test("one Sandbox's open handles leave operation capacity to other Sandboxes", async (t) => {
+  const f = await syntheticDispatchFixture(t);
+  const s = f.sandboxes();
+  const held = new AbortController();
+  // As many requests as the installation-wide cap, each holding its handle open.
+  const decisions = [];
+  for (let i = 0; i < OPERATION_CAPACITY; i += 1) {
+    decisions.push(await s.resolve("a", undefined, held.signal));
+  }
+  assert.equal((await s.resolve("b")).kind, "ready", "another Sandbox's first request");
+  assert.ok(decisions.slice(0, OPERATION_SANDBOX_SHARE).every((d) => d.kind === "ready"));
+  for (const decision of decisions.slice(OPERATION_SANDBOX_SHARE)) {
+    assert.deepEqual(decision, saturated, "a Sandbox holds at most its share");
+  }
+  assert.equal(f.reads, OPERATION_SANDBOX_SHARE + 1, "a refused request starts no selection");
+  // Closing the handles returns the share, and so does their deadline.
+  held.abort();
+  const again = new AbortController();
+  for (let i = 0; i < OPERATION_SANDBOX_SHARE; i += 1) {
+    assert.equal((await s.resolve("a", undefined, again.signal)).kind, "ready");
+  }
+  assert.deepEqual(await s.resolve("a"), saturated);
+  f.advance(20_000);
+  assert.equal((await s.resolve("a")).kind, "ready", "expired handles were discarded");
+});
+
+test("requests still authenticating share a small budget charged before verification", async (t) => {
+  const f = await syntheticDispatchFixture(t);
+  let gate;
+  let verified = 0;
+  let filled;
+  const s = f.sandboxes((ports) => ({
+    ...ports,
+    exchangeOwner: {
+      ...ports.exchangeOwner,
+      async verify(name) {
+        verified += 1;
+        if (gate && name === "a") {
+          if (verified === OPERATION_AUTHENTICATION_BUDGET) {
+            filled.resolve();
+          }
+          await gate.promise;
+        }
+        return ports.exchangeOwner.verify(name);
+      },
+    },
+  }));
+  gate = Promise.withResolvers();
+  filled = Promise.withResolvers();
+  const pending = Array.from({ length: OPERATION_AUTHENTICATION_BUDGET }, () => s.resolve("a"));
+  await filled.promise;
+  assert.deepEqual(await s.resolve("b"), saturated, "the budget is global before verification");
+  assert.equal(verified, OPERATION_AUTHENTICATION_BUDGET, "the excess request is never verified");
+  gate.resolve();
+  assert.ok((await Promise.all(pending)).every((decision) => decision.kind === "ready"));
+  gate = undefined;
+  // Verified requests moved to their Sandbox's share and left the budget.
+  assert.equal((await s.resolve("b")).kind, "ready");
+});
+
+test("every refusal returns its operation slot", async (t) => {
+  const f = await syntheticDispatchFixture(t);
+  let mode;
+  let gate;
+  let gated = 0;
+  let filled;
+  const s = f.sandboxes((ports) => ({
+    ...ports,
+    exchangeOwner: {
+      ...ports.exchangeOwner,
+      async verify(name) {
+        if (mode === "gated" && name === "a") {
+          if (++gated === OPERATION_AUTHENTICATION_BUDGET) {
+            filled.resolve();
+          }
+          await gate.promise;
+        }
+        if (mode === "verification throws") {
+          throw new Error("synthetic verification failure");
+        }
+        return mode === "unknown peer" ? undefined : ports.exchangeOwner.verify(name);
+      },
+    },
+    installation: async (peer) =>
+      mode === "installation missing" ? undefined : ports.installation(peer),
+    async check(use) {
+      if (mode === "policy throws") {
+        throw new Error("synthetic policy failure");
+      }
+      return mode === "policy denies" ? { kind: "denied", code: "withdrawn" } : ports.check(use);
+    },
+    async read(...args) {
+      if (mode === "Secret read throws") {
+        throw new Error("synthetic Secret failure");
+      }
+      return ports.read(...args);
+    },
+  }));
+  const denied = (code) => ({ kind: "refused", error: { kind: "denied", code } });
+  const unavailable = (code) => ({ kind: "refused", error: { kind: "unavailable", code } });
+  const unsupported = {
+    body: Buffer.from(JSON.stringify({ model: "other-model", input: "hello", store: false })),
+  };
+  const paths = [
+    // Before verification settles: the authentication budget.
+    [
+      "cancelled before verification",
+      () => s.resolve("a", undefined, AbortSignal.abort()),
+      { kind: "refused", error: { kind: "cancelled" } },
+    ],
+    ["unknown peer", () => s.resolve("a"), denied("identity")],
+    [
+      "verification throws",
+      () => s.resolve("a").catch((error) => error.message),
+      "synthetic verification failure",
+    ],
+    [
+      "another Sandbox's ID",
+      () => s.proxy.resolve("a", "other-sandbox", s.request(), new AbortController().signal),
+      denied("identity"),
+    ],
+    // After verification: the Sandbox's share.
+    [
+      "deadline already passed",
+      () => s.resolve("a", { deadlineAt: new Date(f.ports.now()).toISOString() }),
+      { kind: "refused", error: { kind: "deadline_exceeded" } },
+    ],
+    [
+      "installation missing",
+      () => s.resolve("a"),
+      { kind: "refused", error: { kind: "not_ready", code: "attachment_pending" } },
+    ],
+    ["unsupported route", () => s.resolve("a", unsupported), denied("unsupported_operation")],
+    ["policy denies", () => s.resolve("a"), denied("withdrawn")],
+    ["policy throws", () => s.resolve("a"), unavailable("authority")],
+    ["Secret read throws", () => s.resolve("a"), unavailable("secret_store")],
+  ];
+  // Each path refuses more requests than the budget or a share holds, and all of them
+  // together more than the installation-wide cap.
+  for (const [name, attempt, refused] of paths) {
+    mode = name;
+    for (let i = 0; i <= OPERATION_SANDBOX_SHARE; i += 1) {
+      assert.deepEqual(await attempt(), refused, name);
+    }
+    mode = undefined;
+    const closed = new AbortController();
+    assert.equal((await s.resolve("a", undefined, closed.signal)).kind, "ready", name);
+    closed.abort();
+  }
+  // No slot was returned twice either: the share and the budget still hold exactly.
+  const held = new AbortController();
+  for (let i = 0; i < OPERATION_SANDBOX_SHARE; i += 1) {
+    assert.equal((await s.resolve("a", undefined, held.signal)).kind, "ready");
+  }
+  assert.deepEqual(await s.resolve("a"), saturated, "the share still holds");
+  held.abort();
+  mode = "gated";
+  gate = Promise.withResolvers();
+  filled = Promise.withResolvers();
+  const pending = Array.from({ length: OPERATION_AUTHENTICATION_BUDGET }, () => s.resolve("a"));
+  await filled.promise;
+  assert.deepEqual(await s.resolve("b"), saturated, "the budget still holds");
+  mode = undefined;
+  gate.resolve();
+  assert.ok((await Promise.all(pending)).every((decision) => decision.kind === "ready"));
 });
 
 test("requests refused before capture leave the replay table to every Sandbox", async (t) => {
@@ -1686,7 +1856,6 @@ test("one Sandbox's replay share bounds it without refusing other Sandboxes", as
       return ports.installation(peer);
     },
   }));
-  const saturated = { kind: "refused", error: { kind: "unavailable", code: "resolver" } };
   // Material was selected, so each ID stays reserved after its handle closes.
   const use = async (name) => {
     const closed = new AbortController();
@@ -1783,6 +1952,7 @@ test("cancelled and denied exchanges retain capacity until receipt work settles"
       const fillerCancellation = new AbortController();
       let now = f.ports.now();
       let filling = 0;
+      const filled = Promise.withResolvers();
       const pause = async (name) => {
         if (phase === name || (phase === "expiry" && name === "authorize")) {
           entered.resolve();
@@ -1794,16 +1964,25 @@ test("cancelled and denied exchanges retain capacity until receipt work settles"
         now: () => now,
         exchangeOwner: {
           ...f.ports.exchangeOwner,
+          // Fillers and the probe authenticate as the target's Sandbox, so they share its
+          // slots, with a peer that outlives the target's deadline.
           async verify(authorization) {
-            if (authorization === "filler") {
-              filling += 1;
-              return fillerGate.promise;
-            }
-            if (authorization === "probe") {
-              return undefined;
-            }
-            return f.ports.exchangeOwner.verify(authorization);
+            const peer = await f.ports.exchangeOwner.verify(authorization);
+            return ["filler", "probe"].includes(authorization)
+              ? { ...peer, expiresAt: new Date(now + 3_600_000).toISOString() }
+              : peer;
           },
+        },
+        // The first requests hold the share's slots in their installation lookup.
+        async installation(peer) {
+          if (filling < OPERATION_SANDBOX_SHARE - 1) {
+            if (++filling === OPERATION_SANDBOX_SHARE - 1) {
+              filled.resolve();
+            }
+            await fillerGate.promise;
+            return undefined;
+          }
+          return f.ports.installation(peer);
         },
         check: async (use, evidence) =>
           phase === "deny" && evidence
@@ -1827,17 +2006,23 @@ test("cancelled and denied exchanges retain capacity until receipt work settles"
         },
       });
       const sandboxId = f.association.installation.sandboxId;
-      const resolve = (authorization, signal) =>
-        proxy.resolve(authorization, sandboxId, f.request, signal);
-      const fillers = Array.from({ length: 1023 }, () =>
+      const resolve = (authorization, signal, request = f.request) =>
+        proxy.resolve(authorization, sandboxId, request, signal);
+      // The probe is refused at its deadline once it gets a slot.
+      const probe = () =>
+        resolve("probe", fillerCancellation.signal, {
+          ...f.request,
+          deadlineAt: new Date(0).toISOString(),
+        });
+      // Leave the Sandbox's share one slot.
+      const fillers = Array.from({ length: OPERATION_SANDBOX_SHARE - 1 }, () =>
         resolve("filler", fillerCancellation.signal),
       );
-      assert.equal(filling, 1023);
-      const saturated = { kind: "refused", error: { kind: "unavailable", code: "resolver" } };
+      await filled.promise;
       const target = (async () => {
         const ready = await resolve("synthetic-peer", cancellation.signal);
         assert.equal(ready.kind, "ready");
-        assert.deepEqual(await resolve("probe", fillerCancellation.signal), saturated);
+        assert.deepEqual(await probe(), saturated);
         const decision = await proxy.authorizeSend(
           "synthetic-peer",
           sandboxId,
@@ -1878,15 +2063,15 @@ test("cancelled and denied exchanges retain capacity until receipt work settles"
           cancellation.abort();
         }
         assert.deepEqual(
-          await resolve("probe", fillerCancellation.signal),
+          await probe(),
           saturated,
           "revoking the handle must not release pending receipt work",
         );
         waiting.resolve();
         await target;
         assert.deepEqual(
-          await resolve("probe", fillerCancellation.signal),
-          { kind: "refused", error: { kind: "denied", code: "identity" } },
+          await probe(),
+          { kind: "refused", error: { kind: "deadline_exceeded" } },
           "capacity returns when the final outstanding work settles",
         );
         assert.equal(f.arrivals, 0);
@@ -1894,7 +2079,7 @@ test("cancelled and denied exchanges retain capacity until receipt work settles"
         cancellation.abort();
         fillerCancellation.abort();
         waiting.resolve();
-        fillerGate.resolve(undefined);
+        fillerGate.resolve();
         await Promise.allSettled([target, ...fillers]);
       }
     });
