@@ -84,6 +84,10 @@ export const AuthSecretGrantDenied = {
   ...story("authSecretGrantDenied"),
   name: "Authentication saved, grant denied",
 };
+export const AuthSecretGrantMemberUnverified = {
+  ...story("authSecretGrantMemberUnverified"),
+  name: "Member authentication saved, access not verified",
+};
 export const AuthSecretGrantLoading = {
   ...story("authSecretGrantLoading"),
   name: "Checking model Secret access",

@@ -65,7 +65,10 @@ import {
 import {
   type CarriedChannelSecrets,
   type OutstandingSecretGrants,
+  type SecretGrantProblem,
   grantProblemFor,
+  grantWarning,
+  harnessGrantSubject,
   createChannelSecretsPanel,
   hasRequiredChannelCredentials,
   channelCredentialBlockReason,
@@ -117,6 +120,8 @@ interface AuthenticationDraft {
   baseline: Pick<Agent, "configurationId" | "harnessAuth" | "servicePrincipalId">;
   savedAuthentication: Agent | null;
   outcomeUnknown: boolean;
+  // Why the saved source's grant is outstanding, once a grant attempt answered (finding 2259).
+  grantProblem?: SecretGrantProblem;
 }
 
 interface DraftDetails {
@@ -3614,6 +3619,30 @@ export async function renderAgentDetail(
         }
       });
       let savedAuthentication = retained?.savedAuthentication ?? null;
+      let grantProblem = retained?.grantProblem ?? null;
+      // The credential the Agent's grant covers: its credential source or its Secret, if any.
+      const grantedCredential = (binding: HarnessAuthBinding | null | undefined) =>
+        binding?.method === "credential_source"
+          ? {
+              kind: "credential_source" as const,
+              namespaceId: context.namespaceId,
+              id: binding.sourceId,
+            }
+          : binding && "source" in binding && binding.source.kind === "secret"
+            ? binding.source
+            : null;
+      // The shared grant wording (finding 1920), for the saved source's credential kind. A
+      // refused grant request keeps Retry: it works once the reader's access is restored.
+      const grantText = (problem: SecretGrantProblem) =>
+        grantWarning(
+          problem,
+          harnessGrantSubject(
+            savedAuthentication?.harnessAuth?.method === "credential_source"
+              ? "credential_source"
+              : "secret",
+          ),
+        ) +
+        (problem === "refused" ? " Select Retry credential access once you have that access." : "");
       const originalFields = retained?.originalFields ?? auth.capture();
       const bindingFields = ({
         method,
@@ -3646,15 +3675,19 @@ export async function renderAgentDetail(
               baseline,
               savedAuthentication,
               outcomeUnknown: outcomeUnknown || pending,
+              ...(grantProblem ? { grantProblem } : {}),
             }
           : undefined;
       });
       if (savedAuthentication) {
         save.textContent = "Retry credential access";
+        // This session sent no grant because it cannot make one, so a Retry would be refused too.
+        save.hidden = grantProblem === "unverified";
         auth.setDisabled(true);
         setStatusTone(feedback, "warning");
-        feedback.textContent =
-          "Authentication source saved. Retry credential access to confirm this Agent can use the selected Secret.";
+        feedback.textContent = grantProblem
+          ? grantText(grantProblem)
+          : "Authentication source saved. Retry credential access to confirm this Agent can use the selected Secret.";
       }
       if (outcomeUnknown) {
         save.disabled = true;
@@ -3684,6 +3717,8 @@ export async function renderAgentDetail(
         data.setAuthenticationPending(true);
         say(savedAuthentication ? "Checking Secret access…" : "Saving authentication…");
         let mutationStarted = false;
+        // Set once the grant request starts: a retry first rereads the Agent.
+        let grantRequested = false;
         try {
           const current = await readAgent();
           if (!context.isCurrent()) {
@@ -3743,20 +3778,27 @@ export async function renderAgentDetail(
             savedAgent = updated;
             details = null;
           }
-          if (harnessAuth?.method === "credential_source") {
-            say("Authentication saved. Checking credential source access…");
-            await ensureCredentialOperateBinding(context, current, {
-              kind: "credential_source",
-              namespaceId: context.namespaceId,
-              id: harnessAuth.sourceId,
-            });
-          } else if (
-            harnessAuth &&
-            "source" in harnessAuth &&
-            harnessAuth.source.kind === "secret"
-          ) {
-            say("Authentication saved. Checking Secret access…");
-            await ensureCredentialOperateBinding(context, current, harnessAuth.source);
+          const credential = grantedCredential(harnessAuth);
+          if (credential && context.installationAdmin === false) {
+            // Granting writes IAM policy, which needs Installation administration. The session
+            // already knows this member lacks it, so it sends no grant that would be refused, and
+            // no IAM read either. Nothing verified the Agent's access, which an administrator may
+            // already have granted. It names who grants it, as Create Agent does (findings 2109,
+            // 2259).
+            grantProblem = "unverified";
+            if (context.isCurrent()) {
+              say(grantText(grantProblem), "warning");
+            }
+            return;
+          }
+          if (credential) {
+            say(
+              credential.kind === "credential_source"
+                ? "Authentication saved. Checking credential source access…"
+                : "Authentication saved. Checking Secret access…",
+            );
+            grantRequested = true;
+            await ensureCredentialOperateBinding(context, current, credential);
           }
           if (context.isCurrent()) {
             context.drafts.forget("authentication");
@@ -3773,12 +3815,27 @@ export async function renderAgentDetail(
           if (requestFailure(error).status === 401) {
             context.onExpired();
           } else if (savedAuthentication) {
-            say(
-              savedAuthentication.harnessAuth?.method === "credential_source"
-                ? `Authentication source saved, but this Agent's credential source access could not be confirmed. ${message(error)} Ask a Namespace administrator to grant this Agent operate access to the selected credential source, then retry credential access. Deployment readiness is not confirmed.`
-                : `Authentication source saved, but this Agent's Secret access could not be confirmed. ${message(error)} Ask a Namespace administrator to grant this Agent secret:operate on the selected Secret, then retry credential access. Deployment readiness is not confirmed.`,
-              "warning",
-            );
+            const { status, requestId } = requestFailure(error);
+            const requestNote = requestId ? ` Request ID: ${requestId}` : "";
+            if (!grantRequested) {
+              // A retry rereads the Agent before any grant request: its failure is about that
+              // read, not the grant, and Retry stays for when the Agent reads again.
+              say(
+                `Authentication source saved, but this Agent could not be read before retrying its credential access. ${message(error)}${requestNote} Select Retry credential access once the Agent can be read.`,
+                "warning",
+              );
+            } else {
+              // The shared classifier: a refused grant request (403) names who grants it and
+              // keeps Retry; a lost answer or a server error stays unconfirmed (findings 1920,
+              // 2259).
+              grantProblem = grantProblemFor(status) ?? "unconfirmed";
+              say(
+                grantText(grantProblem) +
+                  (grantProblem === "refused" ? "" : ` ${message(error)}`) +
+                  requestNote,
+                "warning",
+              );
+            }
           } else {
             const fields = responseFields(error);
             outcomeUnknown =
@@ -3798,6 +3855,7 @@ export async function renderAgentDetail(
             save.textContent = savedAuthentication
               ? "Retry credential access"
               : "Save authentication source";
+            save.hidden = savedAuthentication !== null && grantProblem === "unverified";
             pending = false;
             reload.disabled = false;
             save.disabled = outcomeUnknown || updateDenied;

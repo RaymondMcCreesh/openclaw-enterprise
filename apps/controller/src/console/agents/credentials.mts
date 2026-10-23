@@ -133,25 +133,76 @@ function credentialSaveError(error: SaveFailure) {
   return text + (error.requestId ? ` Request ID: ${error.requestId}` : "");
 }
 
-// Why saved Slack Secrets still wait for the Agent's access grant: the grant was refused (403),
-// its outcome could not be confirmed, or the Namespace's IAM policy shows none (finding 1920).
-export type SecretGrantProblem = "refused" | "unconfirmed" | "missing";
+// Why a saved Slack Secret or authentication source still waits for the Agent's access grant:
+// the grant was refused (403), its outcome could not be confirmed, the Namespace's IAM policy
+// shows none, or a session known not to administer the Installation sent no grant, so nothing
+// verified it (findings 1920, 2259).
+export type SecretGrantProblem = "refused" | "unconfirmed" | "missing" | "unverified";
 
 export interface OutstandingSecretGrants {
   secrets: SecretReference[];
   problem: SecretGrantProblem;
 }
 
-// Granting an Agent a Secret writes Namespace IAM policy, which needs Installation administration
-// (UX plan A2): a member's refused grant names who finishes it, and Retry Secret access does.
-const GRANT_WARNINGS: Record<SecretGrantProblem, string> = {
-  refused:
-    "Configuration saved, but this Agent cannot use the saved Slack Secret until it is granted access. Granting it needs Installation administration access: ask an Installation administrator to open this Agent's Credentials and select Retry Secret access.",
-  unconfirmed:
-    "Configuration saved, but Secret access grants could not be confirmed. Select Retry Secret access; if it is refused, ask an Installation administrator.",
-  missing:
-    "This Agent has no access to a bound Slack Secret, so deploying it would be refused. Select Retry Secret access to grant it.",
+// The words one grant path's warnings use: what saved, the credential the Agent waits for, what
+// a refused grant means, the control an Installation administrator selects to grant it, and the
+// retry this page offers.
+export interface GrantWarningSubject {
+  saved: string;
+  credential: string;
+  refusal: string;
+  access: string;
+  bound: string;
+  administratorStep: string;
+  retry: string;
+}
+
+const SLACK_GRANT: GrantWarningSubject = {
+  saved: "Configuration",
+  credential: "the saved Slack Secret",
+  refusal: "this Agent cannot use the saved Slack Secret until it is granted access",
+  access: "Secret access grants",
+  bound: "a bound Slack Secret",
+  administratorStep: "Retry Secret access",
+  retry: "Retry Secret access",
 };
+
+// Granting an Agent a credential writes Namespace IAM policy, which needs Installation
+// administration (UX plan A2): a refused or unverified grant names who finishes it and how. The
+// Slack Secret and harness authentication paths share these words (findings 1920, 2259).
+const ADMINISTRATOR_STEP = (step: string) =>
+  `needs Installation administration access: ask an Installation administrator to open this Agent's Credentials and select ${step}.`;
+const GRANT_WARNINGS: Record<SecretGrantProblem, (subject: GrantWarningSubject) => string> = {
+  refused: ({ saved, refusal, administratorStep }) =>
+    `${saved} saved, but ${refusal}. Granting it ${ADMINISTRATOR_STEP(administratorStep)}`,
+  unconfirmed: ({ saved, access, retry }) =>
+    `${saved} saved, but ${access} could not be confirmed. Select ${retry}; if it is refused, ask an Installation administrator.`,
+  missing: ({ bound, retry }) =>
+    `This Agent has no access to ${bound}, so deploying it would be refused. Select ${retry} to grant it.`,
+  unverified: ({ saved, credential, administratorStep }) =>
+    `${saved} saved, but this session did not verify that this Agent can use ${credential}. Granting access ${ADMINISTRATOR_STEP(administratorStep)}`,
+};
+
+export function grantWarning(problem: SecretGrantProblem, subject: GrantWarningSubject) {
+  return GRANT_WARNINGS[problem](subject);
+}
+
+// The harness authentication source's grant. A refusal reports the refused request, not the
+// Agent's access, which nothing read. An administrator's console does not read whether the grant
+// is missing, so the administrator saves the source again, which grants it (finding 2259).
+export function harnessGrantSubject(kind: "secret" | "credential_source"): GrantWarningSubject {
+  const noun = kind === "secret" ? "Secret" : "credential source";
+  return {
+    saved: "Authentication source",
+    credential: `the selected ${noun}`,
+    refusal: `the request to grant this Agent access to the selected ${noun} was refused`,
+    access: `this Agent's ${noun} access`,
+    // Unused for now: this path reads no IAM policy, so it never reports a missing grant.
+    bound: `its authentication ${noun}`,
+    administratorStep: "Save authentication source",
+    retry: "Retry credential access",
+  };
+}
 
 // A definite answer to a grant request is a known outcome: 403 is refused (only an Installation
 // administrator can grant), and 400/404/409/429 left it ungranted for now. A lost answer, a
@@ -411,7 +462,7 @@ export function createChannelSecretsPanel({
   function updateGrantWarning(secretBindings = state.configuration.secretBindings ?? {}) {
     prunePendingSecretGrants(secretBindings);
     const pending = pendingSecretGrants(secretBindings);
-    state.saveGrantWarning = pending.length ? GRANT_WARNINGS[state.grantProblem] : "";
+    state.saveGrantWarning = pending.length ? grantWarning(state.grantProblem, SLACK_GRANT) : "";
     // The page keeps the outstanding grants across rebuilds of this panel.
     onOutstandingGrants?.(
       pending.length ? { secrets: pending, problem: state.grantProblem } : null,
@@ -906,7 +957,9 @@ export function createChannelSecretsPanel({
   return {
     // What the Channels tab says while saved Slack Secrets wait for the Agent's grant.
     grantWarning: () =>
-      state.saving || !pendingSecretGrants().length ? "" : GRANT_WARNINGS[state.grantProblem],
+      state.saving || !pendingSecretGrants().length
+        ? ""
+        : grantWarning(state.grantProblem, SLACK_GRANT),
     section: channelEnabled(values, "slack") || state.carriedNote ? section : null,
     canDeploy,
     credentialsReady,
