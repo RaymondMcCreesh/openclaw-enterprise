@@ -41,6 +41,10 @@ import { databaseUrl, requiresPostgres } from "../helpers/postgres-database.mjs"
 import { standingExecutionPlatform } from "../helpers/postgres-standing-execution.ts";
 import { standingGitOrigin } from "../helpers/prepared-standing-git-peer.ts";
 import { waitFor } from "../helpers/wait-for.mjs";
+import {
+  expireStoppedClaims,
+  waitForRevisionPass,
+} from "../helpers/postgres-worker-revision-support.mjs";
 import { installationOrigin } from "../fixtures/driver-packages/protected-execution-driver/installation-origin.ts";
 
 import { standingGitConversation } from "../helpers/standing-git-conversation.ts";
@@ -602,8 +606,10 @@ function externalGitJourney(
     const compute: ComputeDriver = {
       ...f.compute,
       capability: "compute",
-      async stopRevision() {
-        if (withdrawalStarted) {
+      async stopRevision(stopped) {
+        // The cases share one database, so this worker can also claim an earlier case's due
+        // retirement. Count only this case's Agent.
+        if (withdrawalStarted && stopped.namespaceId === namespaceId) {
           stopAttempts++;
           assert.equal(reducible, false, "Git binding withdrawal must never stop the execution");
         }
@@ -949,6 +955,8 @@ function externalGitJourney(
     }
     const ref = { ...key, revisionId: revision.id };
     t.diagnostic("journey revision " + revision.id);
+    // Queue cadences are not under test here: waits on a worker pass make this revision's
+    // queued passes due.
     try {
       await f.start(compute, {
         emit,
@@ -958,8 +966,10 @@ function externalGitJourney(
           configurationDriver: controller.selectedDriver("configuration"),
         }),
       });
-      await waitFor(
+      await waitForRevisionPass(
         "worker's standing execution",
+        f,
+        revision,
         () => f.state.read((v) => v.repositorySessions.findStandingExecution(ref)),
         25_000,
       );
@@ -1382,18 +1392,15 @@ function externalGitJourney(
       }
 
       // Real owner deadlines: the 5-minute fixture token is inside the 10-minute renewal window.
-      // Wait for the persisted next check, without extending or editing a token or session deadline.
+      // Make the persisted next check due now for the owner's background loop, without
+      // extending or editing a token or session deadline.
       let second = first;
       if (!broad) {
-        const {
-          rows: [{ delay_ms }],
-        } = await pool.query(
-          "SELECT extract(epoch FROM next_check_at-clock_timestamp())*1000 AS delay_ms FROM occ.prepared_github_families WHERE enabled AND source #>> '{session,revisionId}'=$1",
+        const { rowCount } = await pool.query(
+          "UPDATE occ.prepared_github_families SET next_check_at=clock_timestamp() WHERE enabled AND source #>> '{session,revisionId}'=$1",
           [revision.id],
         );
-        await delay(Math.max(0, Number(delay_ms) + 25), undefined, {
-          signal: t.signal,
-        });
+        assert.equal(rowCount, 1);
         if (!lostRotation) {
           second = await waitFor(
             "worker rotates material",
@@ -1521,6 +1528,7 @@ function externalGitJourney(
           await prepared.close();
           prepared = await startOwner();
           transport = await bindRepositoryGitTransport(drivers, prepared, pool, emit);
+          await expireStoppedClaims(f, revision);
           await f.start(compute, {
             emit,
             transformDrivers: () => ({
@@ -1599,6 +1607,7 @@ function externalGitJourney(
           assert.deepEqual((await readReduction()).records, []);
           peer.reduction.loseReply = true;
           peer.reduction.hideObservation = true;
+          await expireStoppedClaims(f, revision);
           await f.start(compute, {
             emit,
             transformDrivers: () => ({
@@ -1648,16 +1657,24 @@ function externalGitJourney(
           await deniedFetch();
           // A lost apply response and a hidden observation require real cleanup retries.
           // They must GET the original operation, never send its POST again.
-          await waitFor(
+          await waitForRevisionPass(
             "cleanup observes the original operation while hidden",
-            () => peer.reduction.observations.includes(original.request.operationId) || undefined,
+            f,
+            revision,
+            async () => {
+              return (
+                peer.reduction.observations.includes(original.request.operationId) || undefined
+              );
+            },
             65_000,
           );
           assertNoEffect();
           assert.deepEqual((await readReduction()).records, [original]);
           peer.reduction.hideObservation = false;
-          const settledReduction = await waitFor(
+          const settledReduction = await waitForRevisionPass(
             "authorized Git withdrawal is durably observed",
+            f,
+            revision,
             async () => {
               const durable = await readReduction();
               return durable.records[0]?.observed ? durable : undefined;
@@ -1781,8 +1798,10 @@ function externalGitJourney(
       }
       if (reducible) {
         releaseReduction!();
-        await waitFor(
+        await waitForRevisionPass(
           "Git reduction applied by ordinary cleanup",
+          f,
+          revision,
           () => peer.reduction.applies === 1 || undefined,
           25_000,
         );
@@ -1797,6 +1816,7 @@ function externalGitJourney(
         await prepared.close();
         prepared = await startOwner();
         transport = await bindRepositoryGitTransport(drivers, prepared, pool, emit);
+        await expireStoppedClaims(f, revision);
         await f.start(compute, {
           emit,
           transformDrivers: () => ({
@@ -1805,10 +1825,13 @@ function externalGitJourney(
             configurationDriver: controller.selectedDriver("configuration"),
           }),
         });
-        await waitFor(
+        // Cleanup retries after the lost reply on its 30-second cadence.
+        await waitForRevisionPass(
           "replacement worker observes the original reduction",
-          () =>
-            f.state.read(
+          f,
+          revision,
+          async () => {
+            return f.state.read(
               async (view) =>
                 (
                   await view.credentialSources.listCredentialPolicyReductions(
@@ -1817,8 +1840,8 @@ function externalGitJourney(
                   )
                 ).find((reduction) => reduction.bindingId === "policy:repository-git")?.observed ||
                 undefined,
-            ),
-          // Cleanup retries on its ordinary 30-second cadence after the lost reply.
+            );
+          },
           45_000,
         );
         assert.equal(peer.reduction.attempts, 1, "lost acknowledgment never replays POST");
