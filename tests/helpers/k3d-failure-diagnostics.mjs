@@ -4,6 +4,7 @@ import {
   newestMatchingLogLines,
   redactLogLine,
 } from "../../scripts/ci/failure-redaction.mjs";
+import { compareEvents, eventObservedTime } from "../../scripts/ci/kubernetes-event-time.mjs";
 import { diagnosticDeadlinePassed, diagnosticRequestTimeout } from "./kubernetes-real.mjs";
 
 // Failure evidence for k3d tests whose own error says too little. Everything here is
@@ -13,10 +14,6 @@ const logLineChars = 400;
 const maxPods = 5;
 const maxLogContainers = 6;
 const credentialLineMarker = "[redacted credential-bearing line]";
-
-function eventTime(event) {
-  return String(event.lastTimestamp ?? event.eventTime ?? event.metadata?.creationTimestamp ?? "");
-}
 
 function containerState(state, secrets) {
   const message = (text) =>
@@ -186,14 +183,16 @@ export async function podFailureDiagnostic({
           eventPrefix === undefined ||
           String(event.involvedObject?.name ?? "").startsWith(eventPrefix),
       )
-      .sort((a, b) => eventTime(a).localeCompare(eventTime(b)));
+      .sort(compareEvents);
     const kept = [];
     let length = 0;
     for (const event of events.reverse()) {
       const object = event.involvedObject ?? {};
-      const count = (event.count ?? 1) > 1 ? ` x${event.count}` : "";
+      // events.k8s.io writers keep a repeat count in the series.
+      const repeats = event.series?.count ?? event.count ?? 1;
+      const count = repeats > 1 ? ` x${repeats}` : "";
       const line = redactedLine(
-        `${eventTime(event)} ${event.type} ${event.reason} ${object.kind}/${object.name}${count}: ${event.message ?? ""}`,
+        `${eventObservedTime(event) ?? "unknown-time"} ${event.type} ${event.reason} ${object.kind}/${object.name}${count}: ${event.message ?? ""}`,
         secrets,
         fieldChars,
       );
