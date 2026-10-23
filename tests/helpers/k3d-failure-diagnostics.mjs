@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import {
   isCredentialLine,
   maskPrivateKeyLines,
@@ -386,4 +387,58 @@ function completedSandboxCommands(messages) {
     }
   }
   return pending.size === 0 ? [...completed.values()] : undefined;
+}
+
+// The token echo (startTokenEcho in the OpenShell k3d test) answers each Harness curl call with
+// JSON holding a digest of the Authorization header it received. Output that is not one JSON
+// object comes back as `unparsed`, redacted and bounded (finding 1883). Placeholders keep only
+// their prefix, digests are masked, and values in `secrets` and token shapes are redacted.
+const echoOutputChars = 1_000;
+const echoShownChars = 300;
+const placeholderValue = /(openshell:resolve:)[^\s"'\\,;}\]]*/gu;
+const echoDigest = /("digest":\s*")[0-9a-f]{64}/gu;
+
+// Whitespace is collapsed only after redaction, so a secret value keeps its exact shape.
+function shownEchoText(text, secrets, limit) {
+  const masked = String(text ?? "")
+    .replace(placeholderValue, "$1[placeholder]")
+    .replace(echoDigest, "$1[sha256]");
+  return redactLogLine(masked, secrets, limit).replace(/\s+/gu, " ").trim();
+}
+
+/**
+ * The echo's reply to the Harness command that called `url`, with `shown`: that command, its
+ * exit code and the start of its output, redacted, for an assertion message.
+ */
+export function tokenEchoReply(commands, url, secrets) {
+  const echo = commands.find(({ command }) => String(command).includes(url));
+  assert.ok(echo, `the Harness must call ${url}`);
+  const output = String(echo.aggregatedOutput ?? "").trim();
+  const printed = output.length === 0 ? "nothing" : shownEchoText(output, secrets, echoShownChars);
+  const shown =
+    `\`${shownEchoText(echo.command, secrets, echoShownChars)}\` ` +
+    `(exit ${echo.exitCode ?? "unknown"}) printed ${printed}`;
+  let reply;
+  try {
+    reply = JSON.parse(output);
+  } catch {
+    // Not JSON: kept as `unparsed` below.
+  }
+  if (reply === null || typeof reply !== "object" || Array.isArray(reply)) {
+    return { unparsed: shownEchoText(output, secrets, echoOutputChars), shown };
+  }
+  return { ...reply, shown };
+}
+
+/**
+ * The digest in a token echo reply. Output that is not the echo's or OpenShell's JSON fails
+ * here, naming the command and what it printed (finding 2281: a curl error or two merged
+ * commands read as digest `undefined`). JSON without a digest, such as OpenShell's credential
+ * refusal, gives `undefined`, for the caller to judge with `reply.shown` in its message.
+ */
+export function tokenEchoDigest(reply) {
+  if (reply.unparsed !== undefined) {
+    assert.fail(`the token echo call must print JSON: ${reply.shown}`);
+  }
+  return typeof reply.digest === "string" ? reply.digest : undefined;
 }
