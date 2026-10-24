@@ -3669,6 +3669,7 @@ test("startup refuses OpenShell filesystem paths before any Sandbox is created",
     [{ readWrite: ["/tmp", "/"] }, "readWrite/1"],
     [{ readWrite: ["//"] }, "readWrite/0"],
     [{ readOnly: ["/usr/../etc"] }, "readOnly/0"],
+    [{ readOnly: ["/usr/.."] }, "readOnly/0"],
     [{ readOnly: ["/usr\0/etc"] }, "readOnly/0"],
   ]) {
     await rejectsAtStartup(
@@ -3682,12 +3683,24 @@ test("startup refuses OpenShell filesystem paths before any Sandbox is created",
     t,
     (c) => {
       sandboxOf(c).kubernetes.sandboxDataMount.readOnly = true;
-      sandboxOf(c).policy.filesystem = { readWrite: ["/sandbox/enterprise"] };
+      sandboxOf(c).policy.filesystem = { readWrite: ["/tmp", "/sandbox/enterprise"] };
     },
     invalidValue(
-      "/policy/filesystem/readWrite/0",
+      "/policy/filesystem/readWrite/1",
       "The Sandbox data mount is read-only; remove it from readWrite.",
     ),
+  );
+  // Every refused setting is named at once, not only the first.
+  await rejectsAtStartup(
+    t,
+    (c) => {
+      sandboxOf(c).policy.process.runAsUser = "root";
+      sandboxOf(c).policy.filesystem = { readOnly: ["usr"] };
+    },
+    [
+      ...invalidValue("/policy/process/runAsUser", IDENTITY),
+      ...invalidValue("/policy/filesystem/readOnly/0", FILESYSTEM_PATH),
+    ],
   );
   // Control: a writable data mount may be listed in readWrite.
   const writable = sandboxInstallation();
@@ -3703,6 +3716,48 @@ test("startup refuses OpenShell filesystem paths before any Sandbox is created",
     (c) => (sandboxOf(c).policy.filesystem = { readwrite: ["/data"] }),
     structuralRefusal("/policy/filesystem", "additionalProperties", "UNKNOWN_FIELD"),
   );
+});
+
+// The schema leaves these open, so the Driver's own checks are the only refusal. Startup
+// reports each as the same generic detail, so every case must change one valid field of
+// the fixture, and the control below shows the fixture loads otherwise.
+test("startup refuses OpenShell settings its schema leaves open", async (t) => {
+  const refused = invalidValue("", "Configuration violates the Driver's constraints.");
+  const dataMount = (c) => sandboxOf(c).kubernetes.sandboxDataMount;
+  for (const change of [
+    (c) => delete sandboxOf(c).gateway.workspaceMode,
+    // labels() refuses an empty map before the explicit empty check does.
+    (c) => (sandboxOf(c).gateway.operatorNamespaceLabels = {}),
+    (c) =>
+      (sandboxOf(c).gateway.operatorWorkspaceResources = [
+        { apiVersion: "v2", kind: "ServiceAccount", metadata: { name: "sandbox" } },
+      ]),
+    (c) => (sandboxOf(c).gateway.readiness = { ...readinessWait, serviceName: "", timeoutMs: 1 }),
+    (c) => (dataMount(c).subPath = "."),
+    (c) => (dataMount(c).mountPath = "/data"),
+    (c) => delete dataMount(c).readOnly,
+    // Sandbox names need 17 characters after the prefix (a dash and a 16-character hash),
+    // and OpenShell allows 19.
+    (c) => (sandboxOf(c).sandboxNamePrefix = "abc"),
+  ]) {
+    await rejectsAtStartup(t, change, refused);
+  }
+  // Control: the same fields load with accepted values.
+  const accepted = sandboxInstallation();
+  Object.assign(sandboxOf(accepted).gateway, {
+    operatorNamespaceLabels: { team: "agents" },
+    operatorWorkspaceResources: [
+      { apiVersion: "v1", kind: "ServiceAccount", metadata: { name: "sandbox" } },
+    ],
+    readiness: { ...readinessWait, timeoutMs: 1 },
+  });
+  Object.assign(dataMount(accepted), {
+    subPath: "a/b",
+    mountPath: "/sandbox/data",
+    readOnly: true,
+  });
+  sandboxOf(accepted).sandboxNamePrefix = "ab";
+  await loadInstallationFile(t, accepted);
 });
 
 test("startup refuses OpenShell Agent resources that are not objects", async (t) => {
