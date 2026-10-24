@@ -1083,6 +1083,71 @@ func TestCredentialSourceListTableOmitsTheLiveGatewayStatusOnlyGetCarries(t *tes
 	}
 }
 
+func TestCredentialSourceDetailTableShowsTheRefreshStateWhenReported(t *testing.T) {
+	source := `{"id":"cs_1","name":"openai","type":"oauth2-refresh-token","state":"ready","status":{"state":"ready","refresh":{"state":"failed","failureCode":"token_rejected"}}}`
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/namespaces/ns_1/credential-sources":
+			_, _ = io.WriteString(w, `{"data":[{"id":"cs_1","name":"openai","type":"oauth2-refresh-token","state":"ready"}],"meta":{"requestId":"req_1"}}`)
+		case "/namespaces/ns_1/credential-sources/cs_1":
+			_, _ = io.WriteString(w, `{"data":`+source+`,"meta":{"requestId":"req_2"}}`)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(server.Close)
+	keyFile := writeKeyFile(t, `{"data":{"key":"test-key"}}`)
+	args := []string{"credential-source", "get", "cs_1", "--url", server.URL, "--service-key-file", keyFile, "--namespace", "ns_1"}
+
+	var table strings.Builder
+	command := New(&table, io.Discard)
+	command.SetArgs(args)
+	if err := command.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	var got [][]string
+	for _, line := range strings.Split(strings.TrimSpace(table.String()), "\n") {
+		got = append(got, strings.Fields(line))
+	}
+	want := [][]string{
+		{"ID", "NAME", "TYPE", "STATE", "GATEWAY", "STATUS", "REFRESH"},
+		{"cs_1", "openai", "oauth2-refresh-token", "ready", "ready", "failed"},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("table = %#v, want %#v", got, want)
+	}
+
+	var structured strings.Builder
+	command = New(&structured, io.Discard)
+	command.SetArgs(append([]string{"-o", "json"}, args...))
+	if err := command.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	var decoded map[string]any
+	if err := json.Unmarshal([]byte(structured.String()), &decoded); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := decoded["refreshStatus"]; ok {
+		t.Fatalf("json gained a table-only key: %s", structured.String())
+	}
+	status, _ := decoded["status"].(map[string]any)
+	refresh, _ := status["refresh"].(map[string]any)
+	if refresh["state"] != "failed" || refresh["failureCode"] != "token_rejected" {
+		t.Fatalf("json status = %#v", decoded["status"])
+	}
+
+	var list strings.Builder
+	command = New(&list, io.Discard)
+	command.SetArgs([]string{"credential-source", "list", "--url", server.URL, "--service-key-file", keyFile, "--namespace", "ns_1"})
+	if err := command.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(list.String(), "REFRESH") || strings.Contains(list.String(), "failed") {
+		t.Fatalf("list table = %q", list.String())
+	}
+}
+
 func TestRedirectIsReportedWithItsTargetAndNotFollowed(t *testing.T) {
 	var followed bool
 	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
