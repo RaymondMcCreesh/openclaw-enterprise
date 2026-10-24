@@ -514,6 +514,20 @@ an allowlist without its provider is refused: the API treats it as a startup err
 {{- end -}}
 {{- end -}}
 {{- end -}}
+{{- /* YAML and --set read yes/no, true/false, or a bare number as a boolean or number. An unquoted name would mount ConfigMap "true" or skip the theme. */ -}}
+{{- if kindIs "map" .Values.api.consoleTheme -}}
+{{- if hasKey .Values.api.consoleTheme "configMapName" -}}
+{{- $consoleThemeName := .Values.api.consoleTheme.configMapName -}}
+{{- if not (kindIs "string" $consoleThemeName) -}}
+{{- fail "api.consoleTheme.configMapName must be a string: quote a name YAML reads as a number or boolean, or pass it with --set-string" -}}
+{{- else if ne $consoleThemeName "" -}}
+{{- include "openclaw.validateResourceName" (dict "label" "api.consoleTheme.configMapName" "value" $consoleThemeName) -}}
+{{- end -}}
+{{- end -}}
+{{- if and (hasKey .Values.api.consoleTheme "checksum") (not (kindIs "string" .Values.api.consoleTheme.checksum)) -}}
+{{- fail "api.consoleTheme.checksum must be a string: quote a value YAML reads as a number or boolean, or pass it with --set-string" -}}
+{{- end -}}
+{{- end -}}
 {{- if .Values.slackProxy.enabled -}}
 {{- $proxy := .Values.slackProxy -}}
 {{- if .Values.api.channelDirectoryProxyUrl -}}{{- fail "api.channelDirectoryProxyUrl must be empty when slackProxy.enabled uses the chart-managed Service" -}}{{- end -}}
