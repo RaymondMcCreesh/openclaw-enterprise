@@ -895,6 +895,34 @@ export function validPluginRevisionState(value: unknown): value is PluginRevisio
   return true;
 }
 
+/**
+ * The Harness a bundled Plugin Driver's runtime artifacts run in, or undefined when the pair
+ * is supported (or the Driver is not bundled). Compute refuses any other pair when it prepares
+ * a revision; OCC applies the same rule at Agent save, provisioning and deployment, before a
+ * dedicated deployment stops the running revision.
+ */
+export const OPENCLAW_PLUGIN_DRIVER_IMPLEMENTATION = "occ/openclaw-plugin";
+export const CODEX_PLUGIN_DRIVER_IMPLEMENTATION = "occ/codex-plugin";
+
+export function pluginRuntimeHarnessRequirement(
+  implementation: string,
+  harness: Readonly<Pick<RevisionHarnessDescriptor, "id" | "mode">>,
+): string | undefined {
+  if (implementation === CODEX_PLUGIN_DRIVER_IMPLEMENTATION) {
+    return (harness.id === "codex" && harness.mode === "dedicated") ||
+      (harness.id === "openclaw" && harness.mode === "embedded")
+      ? undefined
+      : "a dedicated Codex Harness or embedded OpenClaw Harness";
+  }
+  if (implementation === OPENCLAW_PLUGIN_DRIVER_IMPLEMENTATION) {
+    return harness.id === "openclaw" &&
+      (harness.mode === "embedded" || harness.mode === "dedicated")
+      ? undefined
+      : "an OpenClaw Harness";
+  }
+  return undefined;
+}
+
 export interface Configuration extends Scope {
   readonly id: string;
   readonly namespaceId: string;
