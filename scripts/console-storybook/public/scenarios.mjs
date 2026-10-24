@@ -3089,6 +3089,24 @@ export const scenarios = {
     description:
       "A rejected save retains its Configuration. Reload clears stale choices; retry requires a current repository and access level. Starting a new draft explicitly leaves repository-scoped recovery.",
   },
+  createRosterModelSelection: {
+    group: "Pages/Create Agent",
+    name: "Change a roster's shared primary model",
+    path: create,
+    modelFallbackSelection: true,
+    modelRosterSelection: true,
+    actions: [
+      { selector: "#agent-preset", value: "pre_00000000-0000-4000-8000-000000000001" },
+      click("Use Preset"),
+    ],
+    description:
+      "Model ID changes the shared primary in defaults and matching explicit roster entries, preserving local policies and ordered fallbacks. Inherited model selections stay omitted. Simulated UI proof; no deployment or model request occurs.",
+    steps: [
+      "Change Model ID from primary-model to replacement-model, then leave the field.",
+      "Open Advanced settings. Configuration JSON has the new primary in defaults, main and assistant; inherited has no model field.",
+      "Clear Model ID and enter another-model. Local aliases, parameters and ordered fallbacks remain, and unreferenced old provider rows are retired.",
+    ],
+  },
   createModelFallbackSelection: {
     group: "Pages/Create Agent",
     name: "Choose an existing fallback as primary",
