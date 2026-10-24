@@ -42,6 +42,12 @@ font, pair type sizes with their line heights (for example, `--text-md` with
 The [token checks](../../tests/conformance/console-design-tokens.test.mjs)
 cover these scales and the supported breakpoints.
 
+Navigation pairs the wordmark with a 48 × 38 px
+[mascot for dark surfaces](../../apps/controller/src/console/oce-mascot-inverse.png).
+The white contour is part of that artwork and dims with the header under a modal.
+On a phone the wordmark scales from 14 to 18 px, leaving room for both 44 px controls.
+Sign-in, forced colours, and operator-supplied logos use their original artwork.
+
 Keep a one-page layout with that page. When another page needs the same
 pattern, move the shared rule next to the component it extends and use it in
 both places. Register new assets in the

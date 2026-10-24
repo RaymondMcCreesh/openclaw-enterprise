@@ -127,8 +127,7 @@
   --overlay: var(--color-overlay);
   --shadow: var(--shadow-1);
   --radius: var(--radius-md);
-  /* Keep the scrollbar's space whether or not the page scrolls, so the header and content do not
-     move sideways between short and long pages with classic scrollbars (finding 1520). */
+  /* Keep desktop pages aligned when a classic scrollbar comes and goes (finding 1520). */
   scrollbar-gutter: stable;
 }
 @media (prefers-reduced-motion: reduce) {
@@ -646,6 +645,28 @@ p {
 .topbar .brand,
 .runtime-debug h2 {
   color: inherit;
+}
+/* The inverse mascot has its contour in the artwork. In forced colours, picture uses the
+   original mark at the same size as an operator-supplied logo. */
+.brand-mascot {
+  display: flex;
+  flex: none;
+}
+@media (forced-colors: none) {
+  .brand-mascot img {
+    width: 48px;
+    height: 38px;
+  }
+  .brand:has(.brand-mascot) {
+    gap: var(--space-1);
+  }
+  .topbar:has(.brand-mascot) {
+    column-gap: 0;
+  }
+  .brand--bar:has(.brand-mascot) {
+    font-size: clamp(var(--text-base), 4.4vw, var(--text-xl));
+    line-height: var(--text-lg--line-height);
+  }
 }
 .sidebar .brand {
   padding: var(--space-2) var(--space-3) 0;
@@ -1348,6 +1369,11 @@ p {
   display: none;
 }
 @media (max-width: 760px) {
+  /* Let the top bar, modal backdrop and sheet reach the edge when there is no scrollbar.
+     A real classic scrollbar still gets its space, including while a sheet is open. */
+  :root {
+    scrollbar-gutter: auto;
+  }
   .shell {
     /* A flow root keeps the menu button's margin inside the shell; collapsing through body,
        it moved the whole page when the shell replaced the startup status (finding 1413). */
@@ -1425,6 +1451,10 @@ p {
     position: absolute;
     top: var(--space-5);
     right: var(--space-2);
+  }
+  .sidebar .brand:has(.brand-mascot) {
+    /* Let the full installation name wrap beside the close button's touch target. */
+    padding-inline-end: var(--touch-min);
   }
   .resource {
     align-items: start;
