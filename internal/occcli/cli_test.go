@@ -1264,6 +1264,51 @@ func TestExplicitEmptyFlagValuesAreRefusedBeforeAnyWork(t *testing.T) {
 	}
 }
 
+func TestAgentPolicyFacetMustBeNetworkingBeforeAnyRequest(t *testing.T) {
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		requests++
+		writer.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer server.Close()
+	keyFile := writeKeyFile(t, `{"data":{"key":"test-key"}}`)
+	file := filepath.Join(t.TempDir(), "policy.json")
+	if err := os.WriteFile(file, []byte(`{"expectedVersion":1,"additions":[]}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	connection := []string{"--url", server.URL, "--service-key-file", keyFile, "--namespace", "ns_1"}
+	for _, args := range [][]string{
+		{"agent", "policy", "get", "agt_1", "--facet="},
+		{"agent", "policy", "get", "agt_1", "--facet", "filesystem"},
+		{"agent", "policy", "get", "agt_1", "--facet", "process"},
+		{"agent", "policy", "update", "agt_1", "--facet", "filesystem", "--file", file},
+		{"agent", "policy", "apply", "agt_1", "--facet=", "--revision", "rev_1", "--expected-version", "1"},
+		{"agent", "policy", "editing", "agt_1", "--facet", "filesystem", "--enabled=false"},
+		{"agent", "policy", "recommendations", "agt_1", "--facet", "process", "--revision", "rev_1"},
+	} {
+		requests = 0
+		command := New(io.Discard, io.Discard)
+		command.SetArgs(append(slices.Clone(connection), args...))
+		err := command.Execute()
+		want := "--facet must be networking"
+		if slices.Contains(args, "--facet=") {
+			want = "--facet must name a sandbox policy facet such as networking"
+		}
+		if err == nil || err.Error() != want {
+			t.Errorf("%v: error = %v, want %q", args, err, want)
+		}
+		if requests != 0 {
+			t.Errorf("%v: sent %d requests", args, requests)
+		}
+	}
+	requests = 0
+	command := New(io.Discard, io.Discard)
+	command.SetArgs(append(slices.Clone(connection), "agent", "policy", "get", "agt_1", "--facet", "networking"))
+	if err := command.Execute(); err == nil || requests != 1 {
+		t.Fatalf("--facet=networking: error = %v after %d requests, want the server error after 1", err, requests)
+	}
+}
+
 // The real client must retain policy diagnostics through the ordinary CLI error path.
 func TestPolicyUpdatePrintsConfigurationDetails(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
