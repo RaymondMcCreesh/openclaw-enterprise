@@ -773,6 +773,41 @@ test(
         !item.spec.template.spec.containers[0].ports?.some(({ name }) => name === "metrics"),
       );
     }
+    // The broker shares the worker Pod; reserve its fixed listener only while both are enabled.
+    for (const [overrides, metricsPort, brokerEnabled] of [
+      [{ "metrics.port": "8443" }, "8443", false],
+      [
+        { ...repositoryCredentialValues, "metrics.enabled": "false", "metrics.port": "8443" },
+        undefined,
+        true,
+      ],
+      [repositoryCredentialValues, "9464", true],
+    ]) {
+      const accepted = await resources((await render(overrides)).stdout);
+      const pod = accepted.find(
+        (item) => item.kind === "Deployment" && item.metadata.name === "openclaw-enterprise-worker",
+      ).spec.template.spec;
+      const worker = [...(pod.initContainers ?? []), ...pod.containers].find(
+        ({ name }) => name === "worker",
+      );
+      assert.equal(worker.env.find(({ name }) => name === "OCC_METRICS_PORT")?.value, metricsPort);
+      assert.equal(
+        worker.ports?.find(({ name }) => name === "metrics")?.containerPort,
+        metricsPort === undefined ? undefined : Number(metricsPort),
+      );
+      const broker = pod.containers.find(({ name }) => name === "repository-credentials");
+      assert.equal(broker !== undefined, brokerEnabled);
+      if (brokerEnabled) {
+        assert.equal(
+          broker.ports.find(({ name }) => name === "repository-tls").containerPort,
+          8443,
+        );
+      }
+    }
+    await assert.rejects(
+      render({ ...repositoryCredentialValues, "metrics.port": "8443" }),
+      /metrics\.port.*repository/,
+    );
     for (const override of [
       { "metrics.scraperNamespaceLabels.team": "monitoring" },
       { "metrics.scraperPodLabels.app": "prometheus" },
