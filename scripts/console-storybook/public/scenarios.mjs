@@ -7777,6 +7777,7 @@ export const scenarios = {
 
 for (const [id, state, name] of [
   ["policyDenials", "ready", "Policy denials and reviewed network additions"],
+  ["policyUnicodeExecutable", "unicode", "Unicode executable path remains complete"],
   [
     "policyConfigurationAlternate",
     "alternate",
@@ -7846,6 +7847,18 @@ for (const [id, state, name] of [
       "Disable policy editing and confirm approved grants remain visible. Check the empty, denied, unsupported, missing metadata, and unconfirmed stories.",
     ],
     gap: "Simulated UI proof only. These fixtures do not prove authorization, persistence, enforcement, or provider policy activation.",
+    ...(state === "unicode"
+      ? {
+          description:
+            "A normalized executable path has 281 Unicode code points and 551 UTF-16 code units, within the API schema's 512-code-point limit.",
+          steps: [
+            "Copy the full executable path from Installation delegation ceiling. Choose Review suggestion, then paste the copied path into Executable path. Confirm the value still ends with /tool.",
+            "Choose Review changes. Confirm the complete executable path, including /tool, appears in Proposed rules. Choose Save and confirm policy v2 keeps that same path while the current revision stays unchanged.",
+            "Reset the story to repeat. The six directory components each contain 45 Deseret letters (U+10400); the path is 1091 UTF-8 bytes.",
+          ],
+          gap: "Simulated UI proof only. This story does not validate a real executable, save to OCC, apply OpenShell policy or start a workload.",
+        }
+      : {}),
     ...(state === "refreshRace"
       ? {
           description:

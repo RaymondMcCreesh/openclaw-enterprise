@@ -683,8 +683,11 @@ export function installFixture(scenario, evidence) {
     }
   }
   const policyGrant = {
-    id: "python-web",
-    binary: "/usr/bin/python3.11",
+    id: scenario.policyState === "unicode" ? "unicode-tool" : "python-web",
+    binary:
+      scenario.policyState === "unicode"
+        ? "/" + Array(6).fill("\u{10400}".repeat(45)).join("/") + "/tool"
+        : "/usr/bin/python3.11",
     host: "example.org",
     ports: [{ from: 443, to: 443 }],
   };
