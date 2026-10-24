@@ -18,6 +18,29 @@ then follow the [upgrade checklist](upgrade-checklist.md) and
 Entries are newest first. Steps marked _untested_ have not been run against a
 real Installation.
 
+## 2026-10-24: OpenShell refuses a quoted userNamespaces and endpoints without ports
+
+**What breaks.** Controller startup refuses an OpenShell Sandbox Driver
+configuration whose `kubernetes.userNamespaces` is not a YAML boolean (for
+example the quoted string `"false"`, or a key left empty, which is null), or whose
+`policy.networkPolicies[].endpoints[].ports` list is empty. Earlier builds
+started: a quoted `"false"` reached the Gateway as user namespaces on, so
+OpenClaw Agents were refused while Codex Sandboxes kept user namespaces, and an
+endpoint without ports failed every Sandbox creation.
+
+**Who is affected.** OpenShell Installations with either setting. Those with a
+quoted or empty `userNamespaces` could still run Codex Agents; an endpoint
+without ports blocked every Agent.
+
+**How to tell.** Startup fails with `INVALID_TYPE` at
+`/kubernetes/userNamespaces`, or a `minItems` refusal at a path such as
+`/policy/networkPolicies/0/endpoints/0/ports`.
+
+**Steps.** Write `userNamespaces: false` (or `true`) without quotes, or remove
+an empty key, and give each endpoint at least one port; then restart the
+controller. Unquoting `false`
+turns user namespaces off for Codex Sandboxes too, as the setting says.
+
 ## 2026-10-24: chart NetworkPolicy peers are checked at render
 
 **What breaks.** `helm install` and `helm upgrade` refuse a
