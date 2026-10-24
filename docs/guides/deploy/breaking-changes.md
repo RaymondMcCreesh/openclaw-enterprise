@@ -39,6 +39,24 @@ IPv6 CIDR`.
 
 **Steps.** Correct or remove the named field, then run the upgrade again.
 
+## 2026-10-24: OpenShell refuses OpenClaw Agents without user namespaces off
+
+**What breaks.** With the OpenShell Sandbox Driver, Agent save and deployment
+refuse a dedicated OpenClaw Agent with a 400 unless the Driver sets
+`kubernetes.userNamespaces: false`. Earlier builds saved and admitted it, then
+failed every new revision in workspace preparation, after its predecessors had
+stopped.
+
+**Who is affected.** OpenShell Installations that leave
+`kubernetes.userNamespaces` unset or `true` and run OpenClaw Agents; none of
+those Agents could deploy. Codex Agents are unaffected.
+
+**How to tell.** The refusal names `kubernetes.userNamespaces: false`.
+Provisioning status reads still report earlier requests.
+
+**Steps.** Set `kubernetes.userNamespaces: false` in the OpenShell Sandbox
+Driver configuration and restart the controller, or switch the Agent to Codex.
+
 ## 2026-10-24: OpenShell Sandbox policy settings are checked at startup
 
 **What breaks.** Controller startup refuses OpenShell Sandbox settings that the

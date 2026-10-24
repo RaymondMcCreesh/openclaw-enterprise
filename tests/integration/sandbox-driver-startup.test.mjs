@@ -47,6 +47,7 @@ import {
 } from "../../apps/controller/src/drivers/sandbox/openshell-service-transport.ts";
 import { createControllerWorker } from "../../apps/controller/src/worker.ts";
 import {
+  ConfigurationHarnessError,
   CredentialSourceConfigError,
   CredentialSourceRevisionError,
   DependencyUnavailableError,
@@ -824,6 +825,37 @@ test("OpenShell configures only the selected dedicated Harness runtime", () => {
     () => driver.configureAgent(configuration, harness("openclaw", "embedded")),
     /supports only dedicated Harness revisions/,
   );
+});
+
+// Native OpenClaw's private workspace preparation needs userNamespaces: false, and it runs
+// only after a dedicated deploy has stopped its predecessors. Agent save and deploy
+// admission call configureAgent, so they refuse the pair first (finding 2334).
+test("OpenShell refuses dedicated OpenClaw unless user namespaces are off", () => {
+  const configuration = { agents: { defaults: { model: "openai/gpt-5" } } };
+  const harness = (id) => ({ id, version: "1.0.0", mode: "dedicated" });
+  for (const userNamespaces of [undefined, true]) {
+    const options = sandboxInstallation().drivers.sandbox.configuration;
+    if (userNamespaces === undefined) {
+      delete options.kubernetes.userNamespaces;
+    } else {
+      options.kubernetes.userNamespaces = userNamespaces;
+    }
+    const driver = openShellDriver(workspaceGatewayClient(), options);
+    assert.throws(
+      () => driver.configureAgent(configuration, harness("openclaw")),
+      (error) => {
+        // workspace-setup-api.test.mjs proves the API's 400 with this message.
+        assert.ok(error instanceof ConfigurationHarnessError);
+        assert.equal(
+          error.message,
+          "Dedicated OpenClaw needs kubernetes.userNamespaces: false in the OpenShell Sandbox Driver configuration. Select Codex, or ask an operator to set it.",
+        );
+        return true;
+      },
+    );
+    // Codex never runs the preparation, so it is still admitted.
+    assert.ok(driver.configureAgent(configuration, harness("codex")).plugins.entries.codex);
+  }
 });
 
 test("OpenShell pins the Codex sandbox and approval reviewer while preserving other app-server settings", () => {
