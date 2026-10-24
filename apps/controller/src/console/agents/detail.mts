@@ -545,6 +545,8 @@ export async function renderAgentDetail(
   let agentUpdateAllowed = callerPermissionsRead.then((permissions) => permissions?.update);
   // Only the latest reread's answer replaces the summary.
   let permissionsRereads = 0;
+  // The newest reread whose operate answer the page's controls show.
+  let appliedOperateReread = 0;
   // The newest permission read. Logs compares a remembered status denial with it, so an
   // operate grant read since the page was built applies (finding 1579).
   let latestPermissionsRead = callerPermissionsRead;
@@ -2367,7 +2369,7 @@ export async function renderAgentDetail(
     if ("revision" in found) {
       versionRecord = createVersionDeploymentEvidence(context, path, selected, {
         shared: activityRevisionId === selected && !latestDeploymentUnavailable,
-        operateAllowed: callerPermissionsRead.then((permissions) => permissions?.operate),
+        operateAllowed: latestPermissionsRead.then((permissions) => permissions?.operate),
       });
       versionEvidence.append(...versionRecord.panels);
       if (latestDeploymentRecord?.deploymentId === selected) {
@@ -3003,6 +3005,17 @@ export async function renderAgentDetail(
     }
   }
 
+  // Every operate-gated control follows the newest answer read, without a reload: the Stop row,
+  // the shown version's Run diagnostics, and Workspace editors, shown or parked (finding 2328).
+  function applyOperateAnswer(allowed: boolean | undefined) {
+    stopPanel.applyOperate(allowed);
+    versionRecord?.applyOperate(allowed);
+    mountedTab?.applyOperate?.(allowed);
+    for (const tab of retainedTabs.values()) {
+      tab.applyOperate?.(allowed);
+    }
+  }
+
   // Reads the caller's permission answer again; a failed read keeps the last answer.
   function rereadPermissions() {
     const previous = latestPermissionsRead;
@@ -3014,6 +3027,12 @@ export async function renderAgentDetail(
           if (latestDeploymentStatus === "failed" && !deleting) {
             renderLatestDeployment();
           }
+        }
+        // An older reread still applies when no newer one has answered: a newer read that
+        // fails resolves to this answer, which the controls would otherwise never see.
+        if (context.isCurrent() && reread > appliedOperateReread) {
+          appliedOperateReread = reread;
+          applyOperateAnswer(permissions?.operate);
         }
         return permissions;
       },
@@ -3163,14 +3182,6 @@ export async function renderAgentDetail(
       // The deployment may have settled while this tab was parked.
       renderVersionNotice();
       retained.resumeDrafts?.();
-      // Logs can observe a newer Agent operate answer while this editor is parked.
-      if (retained.applyOperate) {
-        void latestPermissionsRead.then((permissions) => {
-          if (context.isCurrent() && mountedTab === retained) {
-            retained.applyOperate?.(permissions?.operate);
-          }
-        });
-      }
       return;
     }
     showDraftEditorNavigationBlock = showBlockInPanel;
