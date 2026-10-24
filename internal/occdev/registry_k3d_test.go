@@ -202,8 +202,15 @@ func TestDevelopmentImageImportPullsRegistryImagesByDigest(t *testing.T) {
 			if countCalls(calls, disconnect) != 1 {
 				t.Fatalf("expected one disconnect: %v", calls)
 			}
-			if countCalls(calls, "docker exec k3d-"+state.Cluster+"-server-0 ctr -n k8s.io images pull --plain-http --platform linux/amd64 "+registryTestAddress+":5000/oce-smoke/runtime@"+profileTestDigest) != 1 {
-				t.Fatalf("expected one pull from the container port: %v", calls)
+			// One pull from the container port, then one tag to the selected name,
+			// then the inventory check. The fixture lists the selected name whatever
+			// was tagged, so the tag itself is pinned here.
+			ctr := "docker exec k3d-" + state.Cluster + "-server-0 ctr -n k8s.io images "
+			source := registryTestAddress + ":5000/oce-smoke/runtime@" + profileTestDigest
+			pull := slices.Index(calls, ctr+"pull --plain-http --platform linux/amd64 "+source)
+			tag := slices.Index(calls, ctr+"tag "+source+" "+registryTestRuntime)
+			if pull < 0 || tag <= pull || slices.Index(calls, ctr+"list") <= tag || countCalls(calls, ctr+"pull ") != 1 || countCalls(calls, ctr+"tag ") != 1 {
+				t.Fatalf("expected one pull from the container port, one tag to the selected name, then the inventory check: %v", calls)
 			}
 			if strings.Contains(stdout.String(), "progress that stays hidden") {
 				t.Fatalf("pull progress reached the output: %s", &stdout)
@@ -279,6 +286,20 @@ func TestDevelopmentImageRegistryAttachEdgeCases(t *testing.T) {
 		}
 		if err := r.detachDevelopmentImageRegistry(context.Background()); err != nil || countCalls(commands(), "docker network disconnect ") != 1 {
 			t.Fatalf("a failed attach was not detached: %v %v", err, commands())
+		}
+	})
+	t.Run("a detach after the caller's context ended", func(t *testing.T) {
+		// An interrupted start cancels the context before the deferred detach
+		// runs; the detach must still remove the registry from the network.
+		commands := fakeProfileCommands(t, map[string]string{"docker": registryPullCases(state.Cluster, filepath.Join(t.TempDir(), "connected"), "")})
+		r := newRegistry()
+		if err := r.attachDevelopmentImageRegistry(context.Background(), state); err != nil {
+			t.Fatal(err)
+		}
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		if err := r.detachDevelopmentImageRegistry(ctx); err != nil || countCalls(commands(), "docker network disconnect ") != 1 || r.imageRegistry.network != "" {
+			t.Fatalf("a cancelled start left the registry attached: %v %v", err, commands())
 		}
 	})
 	t.Run("a connect that fails without connecting", func(t *testing.T) {
