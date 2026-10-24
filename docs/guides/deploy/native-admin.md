@@ -308,7 +308,10 @@ or its console page to start the same recovery.
 If expiry coincides with controller restarts, check persistent session storage
 and whether the configured auth secret changed. In-memory sessions disappear
 on restart; production uses PostgreSQL. Distinguish a console `401` from an
-actual permission denial (`403`), which signing in cannot repair.
+actual permission denial (`403`), which signing in cannot repair. That browser
+document navigation shows a generic 403 page whose only link is the signed-in
+person's Agents list. API clients and WebSocket upgrades still get the refusal
+without that page.
 
 ## Related
 
