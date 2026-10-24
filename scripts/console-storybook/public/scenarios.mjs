@@ -6842,6 +6842,30 @@ export const scenarios = {
       "Select Save authentication source. The grant is written, the tab rebuilds without the warning, and Deploy new version is available; do not deploy.",
     ],
   },
+  authSecretGrantParked: {
+    group: "Components/Credentials",
+    name: "Parked authentication grant",
+    path: `${draft}&tab=credentials`,
+    harnessGrantMissing: true,
+    rules: [
+      { suffix: "/iam/roles", delayMs: 4000 },
+      { suffix: "/iam/access-bindings", delayMs: 4000 },
+    ],
+    actions: [
+      { selector: "#harness-auth-method" },
+      click("Configuration"),
+      click("Set up credentials"),
+      { selector: 'p.status[data-tone="warning"][role="alert"]' },
+    ],
+    description:
+      "An Installation administrator opens Credentials while Namespace IAM is still answering, switches to Configuration, and returns after the read finds no operate grant. The warning is written on the parked form, so Credentials still names Save authentication source. Deploy stays disabled.",
+    steps: [
+      "Credentials shows the saved API-key Secret with Save authentication source enabled. The missing-grant warning is absent while Namespace IAM is delayed.",
+      "The story selects Configuration before that read finishes. Deploy new version becomes disabled and says to confirm authentication and Secret access in Credentials.",
+      "Set up credentials returns to the same form. The warning says deploying would be refused and names Save authentication source. The authentication source control stays enabled.",
+    ],
+    gap: "The IAM delay is simulated. The browser test holds the controller's real Namespace IAM read across the same tab change.",
+  },
   authSecretGrantMemberUnverified: {
     group: "Components/Credentials",
     name: "Member authentication saved, access not verified",

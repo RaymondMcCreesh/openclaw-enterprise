@@ -123,6 +123,12 @@ In **Discard an unsaved Secret choice**, that Secret isn’t listed; reload to d
 In **Issued service accounts unavailable**, switch authentication methods:
 account feedback hides, then returns with the saved issued-account selection.
 
+**Components/Credentials → Parked authentication grant** opens Credentials while
+the simulated Namespace IAM read is still answering, selects Configuration, then
+returns with **Set up credentials**. The missing-grant warning is written on the
+parked form and is visible on return; Deploy stays disabled. The delay is
+simulated. The browser test holds the controller's real IAM read.
+
 In **Components/Channels → Slack Secret menu**, search names/IDs and select with
 arrows and Enter. **Slack create Secret modal** shows Name and masked value.
 In **Slack duplicate Secret name**, rename and retry without reentering the value;

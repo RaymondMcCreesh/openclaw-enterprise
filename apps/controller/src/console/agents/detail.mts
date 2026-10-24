@@ -3754,6 +3754,57 @@ export async function renderAgentDetail(
             !savedAuthentication &&
             bindingFields(auth.capture()) !== bindingFields(originalFields),
         );
+        applySavedGrantWarning();
+      };
+      // The IAM answer is about the saved Secret. A later selection is what Save would grant,
+      // so the warning follows that selection: another Secret clears it, and returning to the
+      // saved Secret restores it. A submit since the read began still owns the status line.
+      let submitted = false;
+      form.addEventListener("submit", () => {
+        submitted = true;
+      });
+      let savedGrantMissing = false;
+      const missingGrantWarning = () =>
+        grantWarning(
+          "missing",
+          harnessGrantSubject(
+            agent.harnessAuth?.method === "credential_source" ? "credential_source" : "secret",
+          ),
+        );
+      const selectionMatchesSavedGrant = () => {
+        const saved = baseline.harnessAuth;
+        const credential = harnessCredential(saved, context.namespaceId);
+        if (!credential) {
+          return false;
+        }
+        const fields = auth.capture();
+        if (credential.kind === "secret") {
+          return (
+            saved?.method === fields.method &&
+            fields.secretSource?.kind === "secret" &&
+            fields.secretSource.id === credential.id &&
+            fields.secretSource.namespaceId === credential.namespaceId
+          );
+        }
+        return (
+          fields.method === "credential_source" &&
+          (fields.credentialSource === null || fields.credentialSource.id === credential.id)
+        );
+      };
+      const applySavedGrantWarning = () => {
+        if (submitted || savedAuthentication || outcomeUnknown) {
+          return;
+        }
+        const warning = missingGrantWarning();
+        if (savedGrantMissing && selectionMatchesSavedGrant()) {
+          setStatusTone(feedback, "warning");
+          feedback.textContent = warning;
+          return;
+        }
+        if (feedback.textContent === warning) {
+          setStatusTone(feedback, null);
+          feedback.textContent = "";
+        }
       };
       form.addEventListener("input", () => syncUnsavedAuthentication());
       form.addEventListener("change", () => syncUnsavedAuthentication());
@@ -3791,28 +3842,11 @@ export async function renderAgentDetail(
         feedback.textContent = "Outcome unknown. Reload authentication source before saving again.";
       }
       // This administrator's console read the saved source's grant as missing: saving the source
-      // again grants it, which the shared wording names (finding 2260).
-      // A submit since the read began owns the status line, even when it failed before saving.
-      let submitted = false;
-      form.addEventListener("submit", () => {
-        submitted = true;
-      });
+      // again grants it, which the shared wording names (finding 2260). The form is retained
+      // while another tab is shown, so the answer is applied even when this tab is parked.
       void data.harnessGrantMissing().then((missing) => {
-        if (
-          missing &&
-          !submitted &&
-          !savedAuthentication &&
-          !outcomeUnknown &&
-          context.isCurrent()
-        ) {
-          setStatusTone(feedback, "warning");
-          feedback.textContent = grantWarning(
-            "missing",
-            harnessGrantSubject(
-              agent.harnessAuth?.method === "credential_source" ? "credential_source" : "secret",
-            ),
-          );
-        }
+        savedGrantMissing = missing;
+        applySavedGrantWarning();
       });
       form.addEventListener("submit", async (event) => {
         event.preventDefault();
