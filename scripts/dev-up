@@ -257,7 +257,7 @@ if [ -z "$container_engine" ] && [ "$requested_container_engine" != docker ] && 
     if [ "${#compose_args[@]}" -gt 0 ]; then
       for arg in "${compose_args[@]}"; do
         case "$arg" in
-          -f | --file | --file=*) compose_file_selected=1 ;;
+          -f | -f?* | --file | --file=*) compose_file_selected=1 ;;
         esac
       done
     fi
