@@ -52,11 +52,23 @@ function configuration() {
   };
 }
 
+// workerStartupFailureCode maps this message to the setting's code; the path is never logged.
+function markerRefusal(name, cause) {
+  return new Error(`${name} must identify an absolute writable path.`, { cause });
+}
+
 function workerStartupFailureCode(error) {
   if (error instanceof PresetFileError) {
     return "PRESET_FILE_INVALID";
   }
   const message = error instanceof Error ? error.message : "";
+  // Name the health marker setting an unusable path came from (finding 2327).
+  if (/^OCC_WORKER_READINESS_PATH /.test(message)) {
+    return "WORKER_READINESS_PATH_INVALID";
+  }
+  if (/^OCC_WORKER_LIVENESS_PATH /.test(message)) {
+    return "WORKER_LIVENESS_PATH_INVALID";
+  }
   if (/stored Installation name breaks the Name rule/.test(message)) {
     return "INSTALLATION_NAME_INVALID";
   }
@@ -123,20 +135,24 @@ try {
       continue;
     }
     if (!marker.startsWith("/")) {
-      throw new Error(`${name} must identify an absolute writable path.`);
+      throw markerRefusal(name);
     }
     try {
       await unlink(marker);
     } catch (error) {
       if (error?.code !== "ENOENT") {
-        throw error;
+        throw markerRefusal(name, error);
       }
     }
   }
   // Startup (Installation and IAM load, Compute preflight) counts against the liveness
   // bound, and an unwritable path fails here rather than as a restart loop later.
   if (livenessPath !== undefined) {
-    await writeFile(livenessPath, `${Date.now()}\n`, { encoding: "utf8", mode: 0o600 });
+    try {
+      await writeFile(livenessPath, `${Date.now()}\n`, { encoding: "utf8", mode: 0o600 });
+    } catch (cause) {
+      throw markerRefusal("OCC_WORKER_LIVENESS_PATH", cause);
+    }
   }
   // The readiness marker appears only once queue health is observed, so its directory is probed
   // through a sibling file. An unwritable path left the worker running but never Ready
@@ -152,9 +168,7 @@ try {
       await writeFile(probe, "", { flag: "wx", mode: 0o600 });
       await unlink(probe);
     } catch (cause) {
-      throw new Error("OCC_WORKER_READINESS_PATH must identify an absolute writable path.", {
-        cause,
-      });
+      throw markerRefusal("OCC_WORKER_READINESS_PATH", cause);
     }
   }
   const drivers = await loadInstallationConfiguration({ mode, startupConfiguration });
