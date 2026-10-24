@@ -269,6 +269,34 @@ test(
   },
 );
 
+test(
+  "operator-named Secrets, keys and namespaces reject YAML booleans and numbers",
+  tooling,
+  async () => {
+    // --set reads true or 1 as a boolean or number, as YAML does for yes/on/1. Rendered as "true"
+    // or "1", the name would pass the name pattern and the Pod would wait for a Secret, key or
+    // Namespace that does not exist.
+    for (const [field, value, enabled = {}] of [
+      ["installation.secretName", "true"],
+      ["installation.key", "true"],
+      ["database.secretName", "123"],
+      ["database.caSecretName", "true"],
+      ["auth.secretKey", "true"],
+      ["dns.namespace", "true"],
+      ["api.clients[0].namespace", "1"],
+      ["database.appUrlKey", "2"],
+      ["bootstrap.password.claimName", "true"],
+      ["gatewayRouting.envoyNamespace", "true", gatewayRoutingValues],
+    ]) {
+      await assert.rejects(
+        render({ ...enabled, [field]: value }),
+        (error) => error.message.includes(`${field} must be a string`),
+        field,
+      );
+    }
+  },
+);
+
 test("execution peer label maps reject non-string values before rendering", tooling, async () => {
   const renderExecution = (field, value, option = "--set-json") =>
     execute(

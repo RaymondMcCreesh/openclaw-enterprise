@@ -17,6 +17,23 @@ then follow the [upgrade checklist](upgrade-checklist.md) and
 Entries are newest first. Steps marked _untested_ have not been run against a
 real Installation.
 
+## 2026-10-24: chart refuses unquoted numeric or boolean names
+
+**What breaks.** `helm install` and `helm upgrade` refuse a Secret,
+ConfigMap, Secret-key or PersistentVolumeClaim name, or a `dns.namespace`,
+`api.clients[].namespace` or `gatewayRouting.envoyNamespace` value, that YAML or `--set` reads as a number or
+boolean. Earlier charts rendered `secretName: 2024` as `"2024"` and
+`secretName: yes` as `"true"`.
+
+**Who is affected.** Values files with an unquoted name that YAML reads as a
+number or boolean, for example `2024`, `1e3`, `yes`, `on` or `false`.
+
+**How to tell.** The render fails with `<field> must be a string: quote a value
+YAML reads as a number or boolean, or pass it with --set-string`.
+
+**Steps.** Quote the value in the values file, or pass it with
+`--set-string`, then run the upgrade again.
+
 ## 2026-10-24: deployment checks a completed workspace setup
 
 **What breaks.** Deploying an Agent whose initial workspace setup already
