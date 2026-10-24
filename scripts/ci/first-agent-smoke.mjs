@@ -915,23 +915,32 @@ async function gatewayTurn({ prompt }) {
       }),
       signal: AbortSignal.timeout(170_000),
     });
-    const text = await response.text();
-    let content;
-    try {
-      content = JSON.parse(text).choices?.[0]?.message?.content;
-    } catch {
-      content = undefined;
-    }
+    const payload = await response.json().catch(() => undefined);
+    const message = response.status === 200 ? payload?.choices?.[0]?.message : undefined;
     process.stdout.write(
       JSON.stringify({
         status: response.status,
-        content: typeof content === "string" ? content : undefined,
-        body: response.status === 200 ? undefined : text.slice(0, 2_000),
+        role: message?.role === "assistant" ? "assistant" : undefined,
+        content: typeof message?.content === "string" ? message.content : undefined,
+        invalidResponse: payload === undefined,
       }),
     );
-  } catch (error) {
-    process.stdout.write(JSON.stringify({ error: String(error?.message ?? error) }));
+  } catch {
+    process.stdout.write("{}");
   }
+}
+
+export function assertChatReply(result, nonce, label) {
+  assert.ok(result.status !== undefined, `${label}: chat request failed before an HTTP response`);
+  assert.equal(result.status, 200, `${label}: chat turn failed`);
+  assert.ok(!result.invalidResponse, `${label}: chat turn returned an unreadable response`);
+  assert.ok(result.role === "assistant", `${label}: reply was not an assistant message`);
+  // This smoke uses a deterministic provider that returns the nonce verbatim.
+  // Whitespace is harmless; an echoed prompt is not a completed answer.
+  assert.ok(
+    typeof result.content === "string" && result.content.trim() === nonce,
+    `${label}: assistant reply did not equal the nonce`,
+  );
 }
 
 async function chatTurn(stack, agent, revisionId) {
@@ -945,11 +954,7 @@ async function chatTurn(stack, agent, revisionId) {
     { input: script, timeout: 4 * minute },
   );
   const result = JSON.parse(stdout);
-  assert.equal(result.status, 200, `${agent.label}: chat turn failed ${JSON.stringify(result)}`);
-  assert.ok(
-    result.content?.includes(nonce),
-    `${agent.label}: reply did not carry the nonce ${JSON.stringify(result)}`,
-  );
+  assertChatReply(result, nonce, agent.label);
   const transport = await assertModelAnswered(nonce, agent.label);
   log(`${agent.label}: chat turn on ${revisionId} answered over ${transport}`);
 }
