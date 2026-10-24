@@ -54,6 +54,12 @@ func TestHelpAndCompletionIgnoreInvalidConnectionOptions(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "OCC timeout must be a positive integer") {
 		t.Fatalf("installation get error = %v, want the timeout error", err)
 	}
+	// Zero is refused too, before the client is built.
+	t.Setenv("OCC_TIMEOUT_SECONDS", "0")
+	_, _, err = runHelp(t, "installation", "get", "--url", "http://127.0.0.1:9", "--service-key-file", "unused")
+	if err == nil || err.Error() != "OCC timeout must be a positive integer number of seconds" {
+		t.Fatalf("installation get with OCC_TIMEOUT_SECONDS=0 error = %v, want the timeout error", err)
+	}
 }
 
 func TestAgentLogsHelpNamesTheOutputFormatsItAccepts(t *testing.T) {
