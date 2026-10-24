@@ -71,6 +71,7 @@ export function renderWorkspaceFiles(
 ) {
   const refreshers: Array<() => Promise<void>> = [];
   const denials: Array<() => void> = [];
+  const restorations: Array<() => void> = [];
   let operateDenied = false;
   const section = element(
     "section",
@@ -182,11 +183,21 @@ export function renderWorkspaceFiles(
       if (operateDenied) {
         save.setAttribute("aria-disabled", "true");
         save.setAttribute("aria-describedby", operateNote.id);
+      } else {
+        save.removeAttribute("aria-disabled");
+        save.removeAttribute("aria-describedby");
       }
     };
+    const missingDenied = `${name} is missing.`;
     denials.push(() => {
       if (status.textContent === missingCreate) {
-        status.textContent = `${name} is missing.`;
+        status.textContent = missingDenied;
+      }
+      updateControls();
+    });
+    restorations.push(() => {
+      if (status.textContent === missingDenied) {
+        status.textContent = missingCreate;
       }
       updateControls();
     });
@@ -428,18 +439,32 @@ export function renderWorkspaceFiles(
   // An answer already settled applies before this section is first painted. It also applies while
   // the tab is parked (another tab is shown), since the page restores these nodes on return; it
   // changes only this section's own nodes.
-  void operateAllowed?.then((allowed) => {
-    if (allowed === false) {
-      operateDenied = true;
+  function applyOperate(allowed: boolean | undefined) {
+    const denied = allowed === false;
+    if (denied === operateDenied) {
+      return;
+    }
+    operateDenied = denied;
+    if (denied) {
       operateNote.textContent = OPERATE_DENIED;
       operateNote.hidden = false;
       for (const deny of denials) {
         deny();
       }
+      return;
     }
+    operateNote.hidden = true;
+    operateNote.textContent = "";
+    for (const restore of restorations) {
+      restore();
+    }
+  }
+  void operateAllowed?.then((allowed) => {
+    applyOperate(allowed);
   });
   return {
     section,
+    applyOperate,
     refresh: () => {
       for (const refresh of refreshers) {
         void refresh();

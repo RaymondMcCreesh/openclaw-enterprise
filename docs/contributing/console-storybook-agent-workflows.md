@@ -85,6 +85,17 @@ or Namespaces, and return with Back/Forward. Check empty and invalid text, then
 explicit Cancel or Reload. The Configuration story keeps deployment disabled;
 workspace Save changes only the selected simulated file.
 
+**Components/Workspace → Save needs Agent operate** is only the first denial.
+**Operate answer on return** keeps that editor mounted. The preview runs the
+visits: the first Logs visit records the runtime-status refusal and Workspace
+files stays read-only; the next Logs visit reads a simulated operate grant and
+AGENTS.md is editable on return; after the edit, the following Logs visit reads
+a revocation, and returning keeps that unsaved text and makes the file read-only.
+Reset story replays it. The permission changes and the runtime refusal are
+simulated. A failed permission read is not this story; the page keeps the previous
+answer. The controller still authorizes every write. The browser test changes the
+controller's real IAM policy across the same tab visits.
+
 In **Flows → Keep an Agent draft**, fill a default starter form, leave, and
 re-enter, also after a refused Create: it returns; Cancel clears it.
 

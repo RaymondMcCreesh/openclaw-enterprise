@@ -7100,7 +7100,51 @@ export const scenarios = {
     description:
       "The Agent permission answer denies operate: the files load read-only, and each Save stays in the Tab order, looks disabled and is described by the note naming Agent operate.",
     steps: ["Tab to Save AGENTS.md and press Enter. Nothing is sent and the file is unchanged."],
-    gap: "Simulated files and permission answer; the API still refuses the write.",
+    gap: "Simulated files and the first permission answer only. Operate answer on return covers a later grant and revocation while this editor stays mounted. The API still refuses the write.",
+  },
+  workspaceOperateRestored: {
+    group: "Components/Workspace",
+    name: "Operate answer on return",
+    path: `${revision}&tab=workspace`,
+    deployed: true,
+    agentPermissionSummary: { update: true, deploy: true, operate: false, delete: true },
+    rules: [
+      { suffix: "/runtime", status: 403 },
+      {
+        suffix: "/agents/agt_00000000-0000-4000-8000-000000000001/permissions",
+        skip: 1,
+        once: true,
+        data: { update: true, deploy: true, operate: true, delete: true },
+      },
+    ],
+    actions: [
+      { selector: "#workspace-operate-denied" },
+      { selector: '[id="workspace-AGENTS.md"][readonly]' },
+      click("Logs"),
+      { text: "Runtime status requires Agent operate" },
+      click("Workspace files"),
+      { selector: "#workspace-operate-denied" },
+      click("Logs"),
+      { text: "Runtime status requires Agent operate" },
+      click("Workspace files"),
+      {
+        selector: 'textarea[id="workspace-AGENTS.md"]:not([readonly])',
+        value: "kept across the revocation",
+      },
+      click("Logs"),
+      { text: "Runtime status requires Agent operate" },
+      click("Workspace files"),
+      { selector: '[id="workspace-AGENTS.md"][readonly]', matches: "kept across the revocation" },
+    ],
+    description:
+      "Workspace files stay parked while Logs reads a newer Agent operate answer. A grant makes them editable on return. A revocation makes them read-only again and keeps unsaved text.",
+    steps: [
+      "Workspace files open read-only, with the note that saving needs Agent operate.",
+      "Logs records the runtime-status refusal. Returning to Workspace files keeps that note.",
+      "The next Logs visit reads an operate grant. Returning hides the note and AGENTS.md is editable.",
+      "After the edit, the following Logs visit reads a revocation. Returning keeps the unsaved text and makes AGENTS.md read-only.",
+    ],
+    gap: "The permission changes and runtime refusal are simulated. A failed permission read is not shown; the page keeps the previous answer. The browser test changes the controller's real IAM policy across the same tab visits. The controller still authorizes every write.",
   },
   workspaceMissing: {
     group: "Components/Workspace",

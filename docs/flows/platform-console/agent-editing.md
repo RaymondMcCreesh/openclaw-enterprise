@@ -1,6 +1,6 @@
 ---
 created: 2026-09-09
-updated: 2026-10-22
+updated: 2026-10-24
 last_updated_session: 01a162e5-4303-7a21-81d4-bb51cec37c66
 ---
 
@@ -281,6 +281,13 @@ when the text differs from that baseline. The comparison uses LF line endings, s
 it does not rewrite an untouched CRLF file. A fresh read checks access before
 restoring a draft, including an empty edit. **Reload** replaces those edits.
 
+Returning to these parked editors applies the newest Agent operate answer the page
+has already read. Logs can observe a newer answer while they are parked. A grant
+makes the files editable and hides the explanation. A revocation makes them
+read-only, shows that explanation, and keeps unsaved text. A failed permission
+read keeps the previous answer. The controller still authorizes every write; the
+editor is not that boundary.
+
 On the first read or an explicit **Reload**, only a `404` with code `NOT_FOUND`
 and message `The requested workspace file was not found.` confirms the file is
 missing. The operator can then choose **Save** to create it, even as an empty file.
@@ -343,10 +350,7 @@ Moved to [Agent stop and deletion](agent-stop-and-deletion.md#8-confirm-deletion
 
 ## Changelog
 
+- 2026-10-24: Restoring parked Workspace files applies the latest observed Agent operate answer. (pr-3474)
 - 2026-10-22 13:00: Rebuild after a plugin save from the save response, so a Stop requested on the page stays shown. (bughunt-1022b)
-- 2026-10-22 10:28: Distinguish a missing workspace file from an unavailable Agent, on first read and after an uncertain save. (01a162e5-4303-7a21-81d4-bb51cec37c66 - 596fdb088)
-- 2026-10-22 10:14: Trace plugin save confirmation and recovery when the response is incomplete or identifies different settings. (01a162ec-b748-7c42-9034-1f0a92b05703 - 345d9f63d)
-- 2026-10-20 05:00: Move steps 7 and 8 (stop, deletion) to [their own trace](agent-stop-and-deletion.md). (docs-split-1020)
-- 2026-10-18 20:30: Show each failure's next step; add Deploy again. (ux-a1)
 
 [Console Agent editing documentation history](agent-editing/history.md) preserves the older dated entries.

@@ -167,6 +167,7 @@ interface MountedTab {
   resumeDrafts?(): void;
   showBlock?(): void;
   refresh?(): void;
+  applyOperate?(allowed: boolean | undefined): void;
   nodes?: ChildNode[];
 }
 
@@ -3162,6 +3163,14 @@ export async function renderAgentDetail(
       // The deployment may have settled while this tab was parked.
       renderVersionNotice();
       retained.resumeDrafts?.();
+      // Logs can observe a newer Agent operate answer while this editor is parked.
+      if (retained.applyOperate) {
+        void latestPermissionsRead.then((permissions) => {
+          if (context.isCurrent() && mountedTab === retained) {
+            retained.applyOperate?.(permissions?.operate);
+          }
+        });
+      }
       return;
     }
     showDraftEditorNavigationBlock = showBlockInPanel;
@@ -3199,6 +3208,9 @@ export async function renderAgentDetail(
         latestPermissionsRead.then((permissions) => permissions?.operate),
       );
       state.refresh = workspace.refresh;
+      if (workspace.applyOperate) {
+        state.applyOperate = workspace.applyOperate;
+      }
       content.append(workspace.section);
       state.loading = false;
       content.style.minHeight = "";
