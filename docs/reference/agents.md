@@ -80,7 +80,8 @@ results are excluded. `progress.nextAttemptAt` is the earliest queued
 eligibility, not a promised start; null while claimed. Terminal `progress`
 is null. Results describe recorded checks, not runtime health.
 
-Nullable `cleanup` reports retirement’s `status` and queued `nextAttemptAt`.
+Nullable `cleanup` reports retirement’s `status` (same meanings) and queued
+`nextAttemptAt`.
 Deployment failure remains terminal. Terminal preparation errors retain
 `error.data.preparation` under schema limits (identities, reasons, scheduling, exits, timestamps),
 excluding raw output and credentials.
