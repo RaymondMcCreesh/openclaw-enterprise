@@ -186,10 +186,11 @@ function deploymentProgress(record: Deployment) {
   const status = deploymentOutcome(record);
   const progress = record.progress;
   const workDescriptions = {
-    queued: progress?.lastAttempt
-      ? "Waiting to continue deployment."
-      : "Waiting for a worker claim.",
-    running: "A worker claim is active.",
+    queued: "Waiting for a worker claim.",
+    // A started deploy stays running between its attempts (finding 2456).
+    running: progress?.nextAttemptAt
+      ? "Deployment work started; waiting for the next attempt."
+      : "A worker claim is active.",
     failed: "Deployment work failed; check the recorded error and current version.",
     superseded: "Deployment work stopped because a newer version superseded this one.",
     stopped: "Deployment work ended because the Agent was stopped.",
@@ -322,8 +323,10 @@ export function createDeploymentStatusPanel(
   let record: Deployment | null = null;
   let error: unknown = null;
   let overviewUnavailable = false;
-  // Tallest the details have been since a deploy was seen pending; see render().
+  // Tallest the details have been since a deploy was seen pending; see reserveHeight().
   let reservedHeight: number | null = null;
+  const heightObserver =
+    typeof ResizeObserver === "function" ? new ResizeObserver(() => holdHeight()) : null;
   let pollTimer: number | undefined;
   // The last record read. A transient read failure (a network error, a timeout, a 5xx) does not
   // end a pending deploy, so polling goes on from it (finding 2085).
@@ -534,7 +537,7 @@ export function createDeploymentStatusPanel(
       );
       previousEvidence = evidence;
     }
-    const changed = patchChildren(content, [
+    patchChildren(content, [
       element(
         "p",
         { className: "muted" },
@@ -551,28 +554,40 @@ export function createDeploymentStatusPanel(
           ]
         : []),
     ]);
-    reserveHeight(changed);
+    reserveHeight();
   }
 
   // A deploy's details grow and shrink as its attempts are recorded, and each change moved the
   // cards below, Share Agent then among them (finding 1598). While a deploy is seen pending, the
   // details keep the tallest height they have shown. Once it settles the space is given back in
   // the same render as the outcome, so a finished deploy leaves no empty card (finding 2369).
-  function reserveHeight(changed: boolean) {
+  function reserveHeight() {
     const pending = deploymentPending(record?.status) || deploymentPending(record?.cleanup?.status);
     if (pending) {
-      reservedHeight ??= 0;
+      if (reservedHeight === null) {
+        reservedHeight = 0;
+        heightObserver?.observe(content);
+      }
+      holdHeight();
     } else if (reservedHeight !== null) {
       reservedHeight = null;
+      heightObserver?.disconnect();
       content.style.removeProperty("min-height");
+    }
+  }
+
+  // The first load renders the panel before the page shows it, where it measures 0, so a height
+  // taken only on a render lost the first Queued height and the details shrank for In progress
+  // (finding 2456). The observer also measures once the panel is shown, before that frame paints.
+  function holdHeight() {
+    if (reservedHeight === null) {
       return;
     }
-    if (reservedHeight === null || !changed) {
-      return;
+    const height = content.getBoundingClientRect().height;
+    if (height > reservedHeight) {
+      reservedHeight = height;
+      content.style.minHeight = `${height}px`;
     }
-    content.style.removeProperty("min-height");
-    reservedHeight = Math.max(reservedHeight, content.getBoundingClientRect().height);
-    content.style.minHeight = `${reservedHeight}px`;
   }
 
   void loadStatus();

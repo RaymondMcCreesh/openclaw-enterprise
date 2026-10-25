@@ -67,8 +67,8 @@ This requires exact AgentRevision `read`, not Agent `operate`.
 Responses include `deploymentId`, `namespaceId`, `agentId`, `status`, nullable
 `error`, plugin `warnings`, nullable `progress`, and nullable `cleanup`.
 
-- `queued`: no live claim; PostgreSQL's clock judges lease expiry.
-- `running`: a live worker claim.
+- `queued`: not claimed yet.
+- `running`: claimed, no result yet, also between attempts.
 - `succeeded`: original work activated the version or found it already selected.
 - `failed`: terminal failure or completion without activation.
 
