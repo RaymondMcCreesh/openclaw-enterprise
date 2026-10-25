@@ -8,6 +8,7 @@ import { ConfigurationHarnessError } from "../../packages/occ/src/index.ts";
 import { createConsoleAppFixture } from "../helpers/console-app.mjs";
 import { createTestKubernetesComputeDriver } from "../helpers/kubernetes-compute.mjs";
 import { createHarnessConfiguration } from "../helpers/harness-configuration.mjs";
+import { createTestConfigurationDriver } from "../helpers/configuration-driver.mjs";
 import {
   apiRequests,
   fileBrowser,
@@ -21,6 +22,7 @@ import {
 import {
   agentPostRequests,
   agentProvisionPostRequests,
+  assertAgentNameTaken,
   configurationPostRequests,
   createModelCredentialSecret,
   enterManualModel,
@@ -213,6 +215,108 @@ test("Dedicated Agent provisioning shows the API's 400 message for an inline mod
   );
   // A 400 means the request was never admitted, so the form unlocks for a fix.
   await waitForEnabled(configuration);
+});
+
+test("Dedicated Agent provisioning refuses a taken Agent name at admission and marks the field", async (t) => {
+  // Exact Configuration create and inspect, as provisioning admission requires, in storage that
+  // can also hold the Configuration of the Agent that already has the name.
+  const { computeDriver } = provisioningDrivers();
+  const configurationDriver = createTestConfigurationDriver({
+    id: "console-provisioning-configuration",
+    exact: true,
+  });
+  const fixture = await createConsoleAppFixture(t, { computeDriver, configurationDriver });
+  await fixture.bootstrap();
+  const namespace = await fixture.createNamespace("Provision taken name", { ready: true });
+  await fixture.createAgent(namespace.id, "Taken provisioned");
+  const { page } = await newPage(t, fixture, { browser });
+  const requests = apiRequests(page, fixture.origin);
+  await login(page, fixture, `/console/agents/new?namespace=${namespace.id}`);
+  await page.getByRole("button", { name: "Start without Preset" }).click();
+  await page.getByLabel("Agent name").fill("Taken provisioned");
+  await pickCodexCredential(page);
+  const refused = page.waitForResponse(
+    (response) =>
+      response.url() === `${fixture.origin}/namespaces/${namespace.id}/agents/provision` &&
+      response.request().method() === "POST",
+  );
+  await page.getByRole("button", { name: "Create Agent" }).click();
+  const response = await refused;
+  // Admission answers Agent create's 409 instead of accepting a job that can only fail
+  // (finding 2420); the console shows it and marks the name field.
+  assert.equal(response.status(), 409);
+  const { error, meta } = await response.json();
+  assert.equal(error.code, "RESOURCE_CONFLICT");
+  assert.equal(
+    error.message,
+    "An Agent with this name already exists in this Namespace. Choose a different name.",
+  );
+  const feedback = page.getByRole("alert").filter({ hasText: meta.requestId });
+  await feedback.waitFor();
+  assert.equal(await feedback.textContent(), `${error.message} Request ID: ${meta.requestId}`);
+  await assertAgentNameTaken(page);
+  assert.equal(agentProvisionPostRequests(requests, namespace.id).length, 1);
+  assert.equal(configurationPostRequests(requests, namespace.id).length, 0);
+  // Editing the name clears the mark.
+  await page.getByLabel("Agent name").fill("Free provisioned");
+  assert.equal(await page.getByLabel("Agent name").getAttribute("aria-invalid"), null);
+});
+
+// A request lost in transit leaves its outcome unknown, so the form locks the plan: the API may
+// have admitted it. A resend of an admitted request returns its job before the name check, so a
+// name 409 to the resend proves nothing was admitted, and the name field unlocks for a new name
+// as it does after a 400 (finding 2420).
+test("A taken-name refusal after an unknown provisioning outcome unlocks the name field", async (t) => {
+  const { computeDriver } = provisioningDrivers();
+  const configurationDriver = createTestConfigurationDriver({
+    id: "console-provisioning-configuration",
+    exact: true,
+  });
+  const fixture = await createConsoleAppFixture(t, { computeDriver, configurationDriver });
+  await fixture.bootstrap();
+  const namespace = await fixture.createNamespace("Provision lost then taken", { ready: true });
+  await fixture.createAgent(namespace.id, "Taken after loss");
+  const { page } = await newPage(t, fixture, { browser });
+  const provisionUrl = `${fixture.origin}/namespaces/${namespace.id}/agents/provision`;
+  // Only the first admission request is lost before it reaches the API.
+  let lost = false;
+  await page.route(provisionUrl, async (route) => {
+    if (!lost && route.request().method() === "POST") {
+      lost = true;
+      await route.abort("failed");
+      return;
+    }
+    await route.fallback();
+  });
+  await login(page, fixture, `/console/agents/new?namespace=${namespace.id}`);
+  await page.getByRole("button", { name: "Start without Preset" }).click();
+  const name = page.getByLabel("Agent name");
+  await name.fill("Taken after loss");
+  await pickCodexCredential(page);
+  await page.getByRole("button", { name: "Create Agent" }).click();
+  await page
+    .getByText(/^Outcome unknown\. Retry resubmits the same request ID and saved references\./)
+    .waitFor();
+  assert.equal(await name.isDisabled(), true);
+
+  const refused = page.waitForResponse(
+    (response) => response.url() === provisionUrl && response.request().method() === "POST",
+  );
+  await page.getByRole("button", { name: "Retry provisioning request" }).click();
+  assert.equal((await refused).status(), 409);
+  await waitForEnabled(name);
+  await assertAgentNameTaken(page);
+  // The API admitted nothing under this request ID, so a new name is a plan it accepts. This
+  // fixture has no transactional provisioning queue, so an accepted plan ends at its 503 (as in
+  // the pinned-runtime test below), not at a taken-name or different-plan 409.
+  await name.fill("Free after loss");
+  const resent = page.waitForResponse(
+    (response) => response.url() === provisionUrl && response.request().method() === "POST",
+  );
+  await page.getByRole("button", { name: "Create Agent" }).click();
+  const accepted = await resent;
+  assert.equal(accepted.status(), 503);
+  assert.equal((await accepted.json()).error.code, "DEPENDENCY_UNAVAILABLE");
 });
 
 test("The pinned runtime lets the Console request dedicated OpenClaw provisioning", async (t) => {
