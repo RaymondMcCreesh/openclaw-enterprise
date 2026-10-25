@@ -4011,6 +4011,7 @@ test("a version editor without Agent update can recover a failed deployment from
     delete: false,
     configurationUpdate: true,
     configurationSecretsOperate: true,
+    agentSourcesOperate: false,
   });
 
   // The header label confirms the page applied the permission answer before recovery is used.
@@ -4119,6 +4120,7 @@ test("a reader without update views the version draft read-only", async (t) => {
     delete: false,
     configurationUpdate: false,
     configurationSecretsOperate: false,
+    agentSourcesOperate: false,
   });
   await page.getByText(CONFIGURATION_READ_ONLY, { exact: true }).waitFor();
   await page.getByText("View native Configuration", { exact: true }).waitFor();
@@ -4251,6 +4253,7 @@ test("an Agent editor without Configuration update sees the Configuration read-o
     delete: false,
     configurationUpdate: false,
     configurationSecretsOperate: false,
+    agentSourcesOperate: true,
   });
   await page.getByText(CONFIGURATION_READ_ONLY, { exact: true }).waitFor();
   assert.equal(await page.getByRole("button", { name: "Edit Configuration" }).count(), 0);
@@ -4654,6 +4657,7 @@ test("a negative permission answer reaching an open Stop or Delete dialog preven
           delete: false,
           configurationUpdate: false,
           configurationSecretsOperate: false,
+          agentSourcesOperate: false,
         },
       },
     );
