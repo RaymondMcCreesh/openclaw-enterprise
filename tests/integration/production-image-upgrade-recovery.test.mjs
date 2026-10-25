@@ -4,6 +4,7 @@ import { randomUUID } from "node:crypto";
 import {
   appendFileSync,
   chmodSync,
+  constants,
   copyFileSync,
   existsSync,
   mkdirSync,
@@ -13,7 +14,7 @@ import {
   unlinkSync,
   writeFileSync,
 } from "node:fs";
-import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, open, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:https";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -62,13 +63,13 @@ const shimTools = {
 
 // A started process's status and output, like spawnSync's, without blocking the other
 // fixtures' commands while it runs.
-function spawnResult(command, args, options) {
+function spawnResult(command, args, options, stderrFd = "pipe") {
   return new Promise((resolve) => {
-    const child = spawn(command, args, { ...options, stdio: ["ignore", "pipe", "pipe"] });
+    const child = spawn(command, args, { ...options, stdio: ["ignore", "pipe", stderrFd] });
     let stdout = "";
     let stderr = "";
     child.stdout.setEncoding("utf8").on("data", (chunk) => (stdout += chunk));
-    child.stderr.setEncoding("utf8").on("data", (chunk) => (stderr += chunk));
+    child.stderr?.setEncoding("utf8").on("data", (chunk) => (stderr += chunk));
     child.on("error", (error) => resolve({ status: null, stdout, stderr: stderr + error.message }));
     child.on("close", (status) => resolve({ status, stdout, stderr }));
   });
@@ -468,12 +469,23 @@ async function fakeCommand(root, { command: tool, args, cwd }, io) {
       out(args.includes("logs") ? pod.log : { status: pod.status ?? { phase: pod.phase } });
     } else if (args.includes("--raw=/readyz")) {
       out("ok");
+    } else if (args.includes("rollout")) {
+      const component = args
+        .find((arg) => arg.startsWith("deployment/"))
+        .split("-")
+        .at(-1);
+      if (take("fail-rollout-" + component)) {
+        return fail(9);
+      }
     } else if (args.includes("scale")) {
       const component = args
         .find((a) => a.startsWith("deployment/"))
         .split("-")
         .at(-1);
       if (component === "worker" && take("fail-scale-worker")) {
+        if (take("block-failure-receipt")) {
+          mkdirSync(join(root, "evidence", "native-command-failures.tsv"));
+        }
         return fail(9);
       }
       state[component] = 0;
@@ -1194,6 +1206,20 @@ async function fixture(
     executionReads: api?.executionReads ?? [],
     accessReviews: api?.reviews ?? [],
     run: (...extra) => execute(script, [...args, ...extra], { cwd: repository, env }),
+    runWithStderr: (fd) =>
+      spawnResult("/bin/bash", ["--", script, ...args], { cwd: repository, env }, fd),
+    // Close the read end before launch; subprocess restores the CLI's default SIGPIPE.
+    runWithBrokenPipe: () =>
+      execute(
+        "python3",
+        [
+          "-c",
+          "import os, subprocess, sys; r, w = os.pipe(); os.close(r); p = subprocess.run(sys.argv[1:], stderr=w); sys.exit(p.returncode if p.returncode >= 0 else 128 - p.returncode)",
+          script,
+          ...args,
+        ],
+        { cwd: repository, env },
+      ),
     state: async () => JSON.parse(await readFile(join(directory, "state.json"), "utf8")),
     events: async () =>
       (await readFile(join(directory, "events"), "utf8")).trim().split("\n").filter(Boolean),
@@ -1226,23 +1252,117 @@ test("resume reads an accepted Secret write before Helm and preserves its other 
   assert.equal(state.worker, 1);
 });
 
+// Open again after resume so a replaced receipt is checked at its published path.
+async function assertPrivateReceipt(path, expected) {
+  const file = await open(path, "r");
+  try {
+    assert.equal((await file.stat()).mode & 0o777, 0o600);
+    assert.equal(await file.readFile("utf8"), expected);
+  } finally {
+    await file.close();
+  }
+}
+
 test("resume recognizes a committed Helm release without rerunning its migration", async (t) => {
-  const f = await fixture(t);
-  await f.failNext("lost-helm-response");
-  await assert.rejects(f.run(), injectedFault);
-  await f.run("--resume");
-  assert.equal((await f.events()).filter((event) => event === "migration").length, 1);
+  for (const [fault, operation, component] of [
+    ["lost-helm-response", "helm-upgrade", "release"],
+    ["fail-rollout-api", "rollout-status", "api"],
+    ["fail-rollout-worker", "rollout-status", "worker"],
+  ]) {
+    await t.test(fault, async (subtest) => {
+      const f = await fixture(subtest);
+      await f.failNext(fault);
+      await assert.rejects(f.run(), (error) => {
+        assert.equal(error.code, 9);
+        assert.match(error.stderr, new RegExp(`${operation}.*${component}.*9`));
+        return true;
+      });
+      const receipt = `${operation}\t${component}\t9\n`;
+      const path = join(f.evidence, "native-command-failures.tsv");
+      await assertPrivateReceipt(path, receipt);
+      // The native failure says nothing about acceptance: Helm committed in
+      // every case, and a readback must recover without another migration.
+      const state = await f.state();
+      assert.equal(state.version, 2);
+      assert.equal(state.helmStatus, "deployed");
+      assert.equal(state.api, 1);
+      assert.equal(state.worker, 1);
+      assert.equal(await readFile(join(f.evidence, "helm-started"), "utf8"), "");
+      await f.run("--resume");
+      await assertPrivateReceipt(path, receipt);
+      assert.equal((await f.events()).filter((event) => event === "migration").length, 1);
+    });
+  }
 });
 
 test("an interrupted quiescence never starts migration while the worker still runs", async (t) => {
   const f = await fixture(t);
   await f.failNext("fail-scale-worker");
   await assert.rejects(f.run(), injectedFault);
+  const path = join(f.evidence, "native-command-failures.tsv");
+  const receipt = "quiescence-scale\tworker\t9\n";
+  assert.equal(await readFile(path, "utf8"), receipt);
   assert.equal((await f.state()).api, 0);
   assert.equal((await f.state()).worker, 1);
+  assert.equal(existsSync(join(f.evidence, "helm-started")), false);
   assert.deepEqual(await f.events(), ["scale-api"]);
+  // A later failed attempt appends its observation instead of erasing the first.
+  await f.failNext("fail-scale-worker");
+  await assert.rejects(f.run("--resume"), injectedFault);
+  assert.equal(await readFile(path, "utf8"), receipt + receipt);
   await f.run("--resume");
+  assert.equal(await readFile(path, "utf8"), receipt + receipt);
   assert.equal((await f.events()).filter((event) => event === "migration").length, 1);
+});
+
+test("native failure status survives failed diagnostics and receipt writes", async (t) => {
+  for (const [stderr, blockedReceipt] of [
+    ["/dev/full", false],
+    [null, true],
+    ["/dev/full", true],
+    ["pipe", true],
+  ]) {
+    await t.test(`${stderr ?? "normal stderr"}, blocked receipt: ${blockedReceipt}`, async (t) => {
+      let sink;
+      if (stderr === "/dev/full") {
+        try {
+          sink = await open("/dev/full", constants.O_WRONLY);
+        } catch (error) {
+          if (error.code !== "ENOENT") {
+            throw error;
+          }
+          t.skip("requires /dev/full (Linux)");
+          return;
+        }
+        t.after(() => sink.close());
+      }
+      const f = await fixture(t);
+      await f.failNext("fail-scale-worker");
+      // A directory denies receipt append even when the test runs as root.
+      if (blockedReceipt) {
+        await f.failNext("block-failure-receipt");
+      }
+      const status = sink
+        ? (await f.runWithStderr(sink.fd)).status
+        : await (stderr === "pipe" ? f.runWithBrokenPipe() : f.run()).then(
+            () => assert.fail("worker scale must fail"),
+            (error) => error.code,
+          );
+      const path = join(f.evidence, "native-command-failures.tsv");
+      const events = await f.events();
+      t.diagnostic(JSON.stringify({ status, events }));
+      assert.equal(status, 9);
+      assert.equal((await f.state()).api, 0);
+      assert.equal((await f.state()).worker, 1);
+      assert.equal(existsSync(join(f.evidence, "helm-started")), false);
+      assert.deepEqual(events, ["scale-api"]);
+      if (blockedReceipt) {
+        assert.deepEqual(await readdir(path), []);
+      } else {
+        await assertPrivateReceipt(path, "quiescence-scale\tworker\t9\n");
+      }
+    });
+  }
 });
 
 test("failed Helm migration keeps old writers stopped and requires checked history and a terminal Job", async (t) => {
