@@ -2002,7 +2002,7 @@ async function editedConfiguration(t: TestContext) {
 // "Checking Configuration…" wait (finding 1646). The status takes it, as Deploy's does, until
 // Edit Configuration takes it once the save lands.
 test("a keyboard Configuration save keeps focus on its status while the save is checked", async (t) => {
-  const { page, namespace, agent } = await editedConfiguration(t);
+  const { page, namespace, agent, edit } = await editedConfiguration(t);
 
   // The save's reread of the Configuration is held, as on a slow link.
   const reread = await holdRequests(t, page, `**${configurationPath({ namespace, agent })}`, {
@@ -2026,6 +2026,7 @@ test("a keyboard Configuration save keeps focus on its status while the save is 
     trail.join(" | "),
   );
   await page.getByRole("status").filter({ hasText: "Configuration saved." }).waitFor();
+  assert.equal(await edit.evaluate((node) => node === globalThis.document.activeElement), true);
 });
 
 // The reader who moved on keeps focus, so no focused control names "Configuration saved.": the
