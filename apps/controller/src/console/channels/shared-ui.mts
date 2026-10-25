@@ -77,6 +77,8 @@ export interface ChannelSectionOptions {
   readOnly: boolean;
   drawerContext: ChannelDrawerContext;
   copy?: SectionCopy;
+  // Why Disable would be refused before any request; the button is shown disabled with it.
+  disableRefusal?: string | null;
   savedNotice?: string;
   onSave(values: ChannelValues, secrets: BindingUpdate): Promise<void>;
   onStateChange?(status: SaveState): void;
@@ -294,10 +296,14 @@ function renderCard(section: HTMLElement, state: ChannelState, provider: Channel
         canDisable
           ? button(`Disable ${provider.name}`, () => void disableProvider(state, provider), {
               tone: "danger",
+              ...(state.disableRefusal ? { disabled: "" } : {}),
             })
           : null,
       ),
     ),
+    canDisable && state.disableRefusal
+      ? element("p", { className: "hint" }, state.disableRefusal)
+      : null,
   );
   const credentials = element("dl", { className: "configuration-summary" });
   for (const binding of provider.secretBindings ?? []) {
@@ -902,6 +908,7 @@ export function renderChannelSection(
     onSaved,
     savedNotice = "",
     copy = {},
+    disableRefusal = null,
     drawerContext,
   }: ChannelSectionOptions,
   providers: readonly ChannelProvider[],
@@ -918,6 +925,7 @@ export function renderChannelSection(
     savedNotice,
     section,
     copy,
+    disableRefusal,
     drawerContext,
     pending: false,
     outcomeUnknown: false,
