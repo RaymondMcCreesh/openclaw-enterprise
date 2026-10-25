@@ -350,6 +350,13 @@ function renderSlackBindings(state: ChannelState) {
   return list;
 }
 
+// Why the channel Secrets are read-only: the caller may not update the Configuration, or may not
+// operate every Secret it binds, which each Configuration save also needs (finding 2437).
+export const CHANNEL_SECRETS_CONFIGURATION_READ_ONLY =
+  "Your access does not include editing this Configuration, so its channel Secrets are read-only.";
+export const CHANNEL_SECRETS_OPERATE_READ_ONLY =
+  "Saving channel Secrets needs Secret operate on each Secret the Configuration binds, which your access does not include.";
+
 export function createChannelSecretsPanel({
   context,
   path,
@@ -362,6 +369,7 @@ export function createChannelSecretsPanel({
   checkGrants = false,
   canGrant = true,
   readOnly = () => false,
+  readOnlyReason = () => CHANNEL_SECRETS_CONFIGURATION_READ_ONLY,
   isCurrent = () => true,
   onOutstandingGrants,
   onConfigurationChange,
@@ -385,6 +393,9 @@ export function createChannelSecretsPanel({
   // True when the caller may not update this Configuration: the bindings are shown, not edited
   // (finding 2432). The page's permission answer can land after the panel is built.
   readOnly?(): boolean;
+  // Why the bindings are read-only: Configuration update, or Secret operate on the Secrets it
+  // binds, which every Configuration save also needs (finding 2437).
+  readOnlyReason?(): string;
   // Whether this panel is still the page's own, for answers that arrive late.
   isCurrent?(): boolean;
   onConfigurationChange?(configuration: Configuration): void;
@@ -604,11 +615,7 @@ export function createChannelSecretsPanel({
       { type: "submit", form: formId, className: "button button--primary" },
       "Save channel Secrets",
     );
-    const readOnlyNote = element(
-      "p",
-      { className: "hint" },
-      "Your access does not include editing this Configuration, so its channel Secrets are read-only.",
-    );
+    const readOnlyNote = element("p", { className: "hint" }, readOnlyReason());
     shown.status = status;
     shown.save = save;
     function createTokenPicker(binding: (typeof SLACK_SECRET_BINDINGS)[number]) {
@@ -674,6 +681,7 @@ export function createChannelSecretsPanel({
       // A session that cannot grant gets no Retry the API would refuse (finding 2263). A reader
       // gets no Save the API would refuse either (finding 2432).
       readOnlyNote.hidden = !readOnly();
+      readOnlyNote.textContent = readOnlyReason();
       save.hidden = readOnly() || (!state.unsavedSecrets && unverifiedGrants());
     };
     shown.updateControls = updateControls;
