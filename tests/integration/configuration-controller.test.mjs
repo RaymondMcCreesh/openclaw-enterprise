@@ -379,6 +379,14 @@ const unboundChannelReference = (path, name) =>
     path,
     `references ${name} without a Configuration Secret binding: bind ${name} in secretBindings to an environment-backed Secret, or remove the reference`,
   );
+// A channel credential `${` the runtime does not substitute (finding 2477), shown as a plain
+// `${name}` or, for other text, only described.
+const useUppercase =
+  "use an uppercase ${NAME} bound to a Secret in secretBindings, or escape literal text as $${NAME}";
+const unsubstitutedChannelReference = (path, shown) =>
+  setting(path, `contains ${shown}, which the runtime does not substitute: ${useUppercase}`);
+const unsubstitutedChannelText = (path) =>
+  setting(path, `contains a \${ the runtime does not substitute: ${useUppercase}`);
 const absoluteUrl = (field) =>
   `Configuration field ${field} must be an absolute http or https URL.`;
 const modelApi = (field) =>
@@ -1529,10 +1537,22 @@ test("Configuration create, update and Agent create's check refuse a channel cre
   // A binding is an own key: an inherited name such as `constructor` binds nothing.
   assertRefused(
     await request(context.app, "PATCH", item, {
-      body: { values: slackWith({ botToken: "${constructor}" }), secretBindings: bothBindings },
+      body: {
+        values: slackWith({ botToken: { source: "env", provider: "default", id: "constructor" } }),
+        secretBindings: bothBindings,
+      },
     }),
     unboundChannelReference("channels.slack.botToken", "constructor"),
     { label: "inherited name" },
+  );
+  // The runtime does not substitute a lowercase name, so it would send `${constructor}` itself as
+  // the token: a secret-input field refuses it, whatever the bindings hold (finding 2477).
+  assertRefused(
+    await request(context.app, "PATCH", item, {
+      body: { values: slackWith({ botToken: "${constructor}" }), secretBindings: bothBindings },
+    }),
+    unsubstitutedChannelReference("channels.slack.botToken", "${constructor}"),
+    { label: "lowercase name" },
   );
   const disabled = await request(context.app, "PATCH", item, {
     body: { values: slackWith({ enabled: false }), secretBindings: {} },
@@ -1670,11 +1690,72 @@ for (const computeImplementation of ["occ/kubernetes", "kubernetes-local"]) {
       await create(slackBindings),
       unboundChannelReference("channels.msteams.appPassword", "MSTEAMS_APP_PASSWORD"),
     );
-    const saved = await create({
+    const allBindings = {
       ...slackBindings,
       MSTEAMS_APP_PASSWORD: await binding("msteams-password"),
-    });
+    };
+    const saved = await create(allBindings);
     assert.equal(saved.status, 201, JSON.stringify(saved.body));
+    // The runtime substitutes a reference anywhere in a value, and with a `:-fallback` too: an
+    // unbound name is never set, so the fallback (here empty) would replace it. Each needs a
+    // binding, and the first unbound one is named (finding 2475). `$${NAME}` is the runtime's
+    // escape for literal text, not a reference.
+    const withAppPassword = (appPassword) => ({
+      ...values,
+      channels: { ...values.channels, msteams: { enabled: true, appPassword } },
+    });
+    // In this secret-input field the runtime also reads a whole `$NAME` as an environment
+    // SecretRef (finding 2476).
+    for (const appPassword of [
+      "secret-${MSTEAMS_TENANT_SECRET}",
+      "${MSTEAMS_TENANT_SECRET:-}",
+      "${MSTEAMS_APP_PASSWORD}-${MSTEAMS_TENANT_SECRET:-fallback}",
+      "$MSTEAMS_TENANT_SECRET",
+    ]) {
+      assertRefused(
+        await request(context.app, "PATCH", `${collection}/${saved.body.data.id}`, {
+          body: { values: withAppPassword(appPassword), secretBindings: allBindings },
+        }),
+        unboundChannelReference("channels.msteams.appPassword", "MSTEAMS_TENANT_SECRET"),
+        { label: appPassword },
+      );
+    }
+    // A `${` the runtime does not substitute (a lowercase name, `-` without `:`) would reach
+    // Teams as written, so it is refused even with every binding (finding 2477). That text may be
+    // the password itself: the message shows only a plain `${name}` or the name before `-`, and
+    // never the rest of the value.
+    const secretText = "9f3c2a7b1d8e4f60a5b6c7d8e9f01234";
+    for (const [appPassword, message] of [
+      [
+        "${msteams_password}",
+        unsubstitutedChannelReference("channels.msteams.appPassword", "${msteams_password}"),
+      ],
+      [`\${${secretText}}`, unsubstitutedChannelText("channels.msteams.appPassword")],
+      [
+        `${secretText}\${MSTEAMS_APP_PASSWORD-${secretText}}`,
+        setting(
+          "channels.msteams.appPassword",
+          "contains ${MSTEAMS_APP_PASSWORD-…}, which the runtime does not substitute: write a fallback as ${MSTEAMS_APP_PASSWORD:-text}, with MSTEAMS_APP_PASSWORD bound to a Secret in secretBindings",
+        ),
+      ],
+    ]) {
+      assertRefused(
+        await request(context.app, "PATCH", `${collection}/${saved.body.data.id}`, {
+          body: { values: withAppPassword(appPassword), secretBindings: allBindings },
+        }),
+        message,
+        { label: appPassword, sentinel: secretText },
+      );
+    }
+    for (const appPassword of [
+      "${MSTEAMS_APP_PASSWORD}$${MSTEAMS_TENANT_SECRET}",
+      "$MSTEAMS_APP_PASSWORD",
+    ]) {
+      const accepted = await request(context.app, "PATCH", `${collection}/${saved.body.data.id}`, {
+        body: { values: withAppPassword(appPassword), secretBindings: allBindings },
+      });
+      assert.equal(accepted.status, 200, `${appPassword}: ${JSON.stringify(accepted.body)}`);
+    }
     // A Preset carries no Secret bindings, so its defaults are not checked against any: the
     // Configuration created from it is checked with its own bindings.
     const preset = await savePreset(context, { configuration: { values } }, "Channels");

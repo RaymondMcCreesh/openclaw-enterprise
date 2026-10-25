@@ -10314,6 +10314,123 @@ test("native channel providers require Secret bindings and project them only to 
       },
     );
   }
+  // Admission reads a string as the runtime substitutes it (finding 2475): a reference anywhere
+  // in the text, or with a `:-fallback`, still needs a binding, since the fallback would replace
+  // the unset name. The `$${NAME}` escape is literal text.
+  const slackToken = (botToken) => ({
+    agents: { defaults: { model: "codex/gpt-5" } },
+    channels: {
+      slack: {
+        appToken: { source: "env", provider: "default", id: "SLACK_APP_TOKEN" },
+        botToken,
+      },
+    },
+  });
+  const appBinding = { SLACK_APP_TOKEN: secretBindings.SLACK_APP_TOKEN };
+  // In a secret-input field such as botToken, a whole `$NAME` is an environment SecretRef too
+  // (finding 2476).
+  for (const botToken of [
+    "xoxb-${SLACK_BOT_TOKEN}",
+    "${SLACK_BOT_TOKEN:-}",
+    "${SLACK_APP_TOKEN}${SLACK_BOT_TOKEN:-xoxb-fallback}",
+    " $SLACK_BOT_TOKEN ",
+  ]) {
+    assert.throws(
+      () =>
+        driver.validateHarnessAuth(
+          revision.harness,
+          revision.harnessAuth,
+          slackToken(botToken),
+          appBinding,
+        ),
+      {
+        name: "ConfigurationHarnessError",
+        message:
+          "Configuration setting channels.slack.botToken references SLACK_BOT_TOKEN without a Configuration Secret binding: bind SLACK_BOT_TOKEN in secretBindings to an environment-backed Secret, or remove the reference.",
+      },
+      botToken,
+    );
+  }
+  for (const botToken of ["xoxb-$${SLACK_BOT_TOKEN}", "$SLACK_APP_TOKEN"]) {
+    driver.validateHarnessAuth(
+      revision.harness,
+      revision.harnessAuth,
+      slackToken(botToken),
+      appBinding,
+    );
+  }
+  // A `${` the runtime does not substitute would reach Slack as written: a secret-input field
+  // refuses it whatever the bindings hold (finding 2477). That text may be the token itself, so
+  // the message shows it only as a plain `${name}`, or only the name of `${NAME-text}`; the
+  // message is also the deployment diagnostic.
+  const useUppercase =
+    "use an uppercase ${NAME} bound to a Secret in secretBindings, or escape literal text as $${NAME}";
+  const token = "xoxb-1234567890-0987654321-AbCdEfGhIjKl";
+  const tokenForm = `Configuration setting channels.slack.botToken contains a \${ the runtime does not substitute: ${useUppercase}.`;
+  for (const [botToken, message] of [
+    [
+      "${slack_bot}",
+      `Configuration setting channels.slack.botToken contains \${slack_bot}, which the runtime does not substitute: ${useUppercase}.`,
+    ],
+    [
+      "${SLACK_BOT_TOKEN-xoxb-fallback}",
+      "Configuration setting channels.slack.botToken contains ${SLACK_BOT_TOKEN-…}, which the runtime does not substitute: write a fallback as ${SLACK_BOT_TOKEN:-text}, with SLACK_BOT_TOKEN bound to a Secret in secretBindings.",
+    ],
+    [`\${${token}}`, tokenForm],
+    [`\${${token}`, tokenForm],
+  ]) {
+    assert.throws(
+      () =>
+        driver.validateHarnessAuth(revision.harness, revision.harnessAuth, slackToken(botToken), {
+          ...appBinding,
+          slack_bot: secretBindings.SLACK_BOT_TOKEN,
+          SLACK_BOT_TOKEN: secretBindings.SLACK_BOT_TOKEN,
+        }),
+      (error) => {
+        assert.equal(error.name, "ConfigurationHarnessError");
+        assert.equal(error.message, message, botToken);
+        assert.equal(error.message.includes("1234567890"), false, botToken);
+        return true;
+      },
+    );
+  }
+  // Named Slack accounts have the same secret-input fields, nested `relay.authToken` included.
+  const slackAccount = (account) => ({
+    agents: { defaults: { model: "codex/gpt-5" } },
+    channels: { slack: { accounts: { ops: account } } },
+  });
+  assert.throws(
+    () =>
+      driver.validateHarnessAuth(
+        revision.harness,
+        revision.harnessAuth,
+        slackAccount({ botToken: "$OPS_BOT" }),
+        {},
+      ),
+    {
+      name: "ConfigurationHarnessError",
+      message:
+        "Configuration setting channels.slack.accounts.ops.botToken references OPS_BOT without a Configuration Secret binding: bind OPS_BOT in secretBindings to an environment-backed Secret, or remove the reference.",
+    },
+  );
+  assert.throws(
+    () =>
+      driver.validateHarnessAuth(
+        revision.harness,
+        revision.harnessAuth,
+        slackAccount({ relay: { authToken: "${relay}" } }),
+        {},
+      ),
+    {
+      name: "ConfigurationHarnessError",
+      message: `Configuration setting channels.slack.accounts.ops.relay.authToken contains \${relay}, which the runtime does not substitute: ${useUppercase}.`,
+    },
+  );
+  // Outside a secret-input field the runtime keeps `$NAME` and other `${` text as written, and a
+  // `:-fallback` fills an unset name, so none of them needs a binding.
+  for (const name of ["$OPS", "${x}", "${OPS_NAME:-ops}"]) {
+    driver.validateHarnessAuth(revision.harness, revision.harnessAuth, slackAccount({ name }), {});
+  }
 
   const ipv6 = createKubernetesComputeDriver(
     options({
