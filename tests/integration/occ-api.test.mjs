@@ -4718,7 +4718,7 @@ test("native ServiceAccounts keep private credential references and cannot admit
   assertApiError(issuance, 409, "SERVICE_ACCOUNT_DRIVER_NOT_CONFIGURED");
   assert.equal(
     issuance.body.error.message,
-    "This Installation has no ChatGPT Backend, so it cannot issue service-account credentials. An administrator must configure the ChatGPT Backend and select its ServiceAccount Driver; see https://docs-enterprise.openclaw.org/guides/integrations/chatgpt/",
+    "This Installation has no ChatGPT Backend, so it cannot issue service-account credentials. An Installation administrator must configure it and select its ServiceAccount Driver; see https://docs-enterprise.openclaw.org/guides/integrations/chatgpt/",
   );
   const unknownIssuance = await controller.request(
     "POST",
@@ -4739,7 +4739,7 @@ test("native ServiceAccounts keep private credential references and cannot admit
   assertApiError(missingCredential, 409, "SERVICE_ACCOUNT_DRIVER_NOT_CONFIGURED");
   assert.equal(
     missingCredential.body.error.message,
-    "ChatGPT Harness authentication requires an issued account access-token credential, and this Installation has no ChatGPT Backend to issue one. An administrator must configure it; see https://docs-enterprise.openclaw.org/guides/integrations/chatgpt/",
+    "ChatGPT Harness authentication needs an issued access-token credential, and this Installation has no ChatGPT Backend to issue one. An Installation administrator must configure it; see https://docs-enterprise.openclaw.org/guides/integrations/chatgpt/",
   );
 
   const initialCredential = {
@@ -4765,10 +4765,7 @@ test("native ServiceAccounts keep private credential references and cannot admit
   const nativeDeployment = await controller.request("POST", deploymentPath);
   assertApiError(nativeDeployment, 409, "SERVICE_ACCOUNT_DRIVER_NOT_CONFIGURED");
   // A PAT source admits only an access-token credential, never an API key in its place.
-  assert.match(
-    nativeDeployment.body.error.message,
-    /requires an issued account access-token credential/,
-  );
+  assert.match(nativeDeployment.body.error.message, /needs an issued access-token credential/);
 
   // OAuth references are representable, but no refresh or OAuth execution exists yet.
   const oauthCredential = {
@@ -4781,10 +4778,7 @@ test("native ServiceAccounts keep private credential references and cannot admit
   assert.equal(oauthUpdate.status, 200);
   const oauthDeployment = await controller.request("POST", deploymentPath);
   assertApiError(oauthDeployment, 409, "SERVICE_ACCOUNT_DRIVER_NOT_CONFIGURED");
-  assert.match(
-    oauthDeployment.body.error.message,
-    /requires an issued account access-token credential/,
-  );
+  assert.match(oauthDeployment.body.error.message, /needs an issued access-token credential/);
 
   const replacementCredential = {
     kind: "api_key",
