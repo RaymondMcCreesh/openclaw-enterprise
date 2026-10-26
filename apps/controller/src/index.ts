@@ -2608,9 +2608,6 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
       const deadline = new Date(Date.now() + deadlineMs);
       try {
         requireWorkspaceFileCsrf(request, operation.operationId === "putAgentWorkspaceFile");
-        if (options.workspaceFilesAccess === undefined) {
-          throw dependencyUnavailable();
-        }
         const filename = params.name;
         if (filename === undefined || !isAllowedWorkspaceFileName(filename)) {
           throw failure(
@@ -2629,7 +2626,9 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
             : controller.getOperableActiveAgentRevision(context.actorId, namespaceId, agentId),
         );
         const target = { kind: "agent" as const, id: agent.id, namespaceId: agent.namespaceId };
-        if (signal.aborted) {
+        // After authorization, so a caller without the grant gets its 403, not this 503
+        // (finding 2584).
+        if (options.workspaceFilesAccess === undefined || signal.aborted) {
           throw dependencyUnavailable();
         }
 
