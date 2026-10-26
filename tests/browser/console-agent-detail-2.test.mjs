@@ -65,8 +65,10 @@ import {
   GENERIC_DENIAL,
   MALFORMED_REQUEST,
   RESOURCE_NOT_FOUND,
+  SANDBOX_POLICY_READ_DENIED,
   WORKSPACE_FILES_UNAVAILABLE,
-  accessDeniedNeeding,
+  askForGrant,
+  notIncluded,
 } from "../helpers/refusal-text.mjs";
 
 // The Console Browser lane runs the two Agent detail test files in parallel.
@@ -484,7 +486,7 @@ test("Repeat deletion preserves bounded retry ownership feedback and ordinary de
   };
   await confirm();
   await page.getByRole("alert").getByText(ownership, { exact: true }).waitFor();
-  await expectNoText(page, "Ask an administrator for Agent delete access", () =>
+  await expectNoText(page, "Ask an Installation administrator for Agent delete on it", () =>
     waitForIdleFetches(page),
   );
   assert.equal(writes, 1);
@@ -2554,7 +2556,7 @@ test("a read-only viewer is denied saved settings and native admin once per tab,
   await unavailable.waitFor();
   // The viewer holds Agent read but not Configuration read: the panel names that grant.
   const draftDenied = page.getByText(
-    accessDeniedNeeding("Reading this Agent's draft Configuration", "Configuration read"),
+    notIncluded("reading this Agent's draft Configuration", "Configuration read"),
     { exact: true },
   );
   await draftDenied.waitFor();
@@ -2709,14 +2711,12 @@ test("an Agent reader meets no refused read on Repositories, Policy denials or L
   await page
     .getByText("Policy denials come from deployed versions. Open the current version to see them.")
     .waitFor();
-  const noPolicyAccess = page.getByText(
-    "Your access does not include reading this Agent’s network policy or its suggestions.",
-  );
+  const noPolicyAccess = page.getByText(SANDBOX_POLICY_READ_DENIED);
   await noPolicyAccess.first().waitFor();
   await settle();
   await expectNoText(
     page,
-    /Deploy an Agent to load Sandbox policy decisions|permission to read|Suggestions come from/,
+    /Deploy an Agent to load Sandbox policy decisions|permission to read|Suggestions come from|No Driver configurations/,
   );
   // The sentence names the suggestions too, so it is said once, on the network policy card: no
   // suggestions card repeats it (finding 2522).
@@ -4177,9 +4177,12 @@ test("Secret summaries retain revision bindings and distinguish unreadable metad
   await page.screenshot({ path: join(artifacts, "bound-harness-revision.png"), fullPage: true });
   await page.getByRole("tab", { name: "Channels", exact: true }).click();
   await page.getByRole("link", { name: "Revision Slack app", exact: true }).waitFor();
-  await page
-    .getByText(`Bound Secret · ${bot.id} · Metadata unavailable (access denied)`, { exact: true })
-    .waitFor();
+  const hiddenSecret = page.getByText(
+    `A Secret is bound. Its name is hidden because your access does not include reading it. ${askForGrant("Secret read on it")}`,
+    { exact: true },
+  );
+  await hiddenSecret.waitFor();
+  assert.equal(await hiddenSecret.getAttribute("title"), bot.id);
   assert.equal(await page.getByRole("button", { name: /Configure Slack|Edit Slack/ }).count(), 0);
   await page.screenshot({ path: join(artifacts, "bound-channels-restricted.png"), fullPage: true });
   assert.equal(

@@ -31,7 +31,16 @@ import {
   withholdPermissionSummary,
 } from "./console-agents-test-support.mjs";
 import { createPolicyConsole } from "./console-sandbox-policy-fixture.ts";
-import { CONFIGURATION_SAVE_DENIED } from "../helpers/refusal-text.mjs";
+import {
+  AGENT_SOURCES_DENIED,
+  AGENT_STOP_DENIED,
+  AGENT_UPDATE_DENIED,
+  askForGrant,
+  CONFIGURATION_SAVE_DENIED,
+  DIAGNOSTICS_DENIED,
+  stopRefused,
+  WORKSPACE_SAVE_DENIED,
+} from "../helpers/refusal-text.mjs";
 
 // Every test opens its own context in one Chromium per file.
 const browser = fileBrowser();
@@ -43,16 +52,12 @@ const browser = fileBrowser();
 // grant they need; Agent-side saves are disabled up front when the permission answer denies
 // Agent update.
 
-const AGENT_UPDATE_DENIED =
-  "Your access does not include updating this Agent. Ask an administrator for Agent update access to save these settings.";
-const AGENT_SOURCES_DENIED =
-  "Saving these settings needs operate on each Secret and credential source this Agent and its Configuration bind, which your access does not include. Ask an administrator for that access.";
 const AGENT_SOURCES_SERVICE_ACCOUNT_DENIED =
-  "Saving these settings needs operate on each Secret and credential source this Agent and its Configuration bind, and read on the ServiceAccount it uses for Harness authentication. Your access does not include all of them. Ask an administrator for that access.";
+  "Saving these settings needs operate on each Secret and credential source this Agent and its Configuration bind, and read on the ServiceAccount it uses for Harness authentication. Your access does not include all of them. Ask an Installation administrator for that access.";
 const AGENT_CONFIGURATION_READ_DENIED =
-  "Saving these settings needs read access to this Agent's Configuration, which your access does not include. Ask an administrator for Configuration read access.";
+  "Saving these settings needs read access to this Agent's Configuration, which your access does not include. Ask an Installation administrator for Configuration read on it.";
 const READ_REFUSAL =
-  "You do not have permission to read this Agent's saved settings. Ask an administrator for Agent read and Configuration read access.";
+  "You do not have permission to read this Agent's saved settings. Ask an Installation administrator for Agent read and Configuration read on it.";
 
 // A member who can read the Namespace's Agents and Configurations but change nothing.
 const READER = "save-refusal-reader";
@@ -598,14 +603,13 @@ test("a refused workspace file save names Agent operate", async (t) => {
   await page.getByRole("button", { name: "Save AGENTS.md", exact: true }).click();
   await page
     .getByText(
-      "You do not have permission to save this file. Ask an administrator for Agent operate access.",
+      `You do not have permission to save this file. ${askForGrant("Agent operate on it")}`,
     )
     .waitFor();
   assert.equal(await editor.inputValue(), "after");
 });
 
-const OPERATE_REASON =
-  "Your access does not include operating this Agent. Ask an administrator for Agent operate access to save workspace files.";
+const OPERATE_REASON = WORKSPACE_SAVE_DENIED;
 
 // A member who can read the Agent but not operate it was offered an enabled Save on every
 // workspace file, and learned only from the refusal that saving needs Agent operate (finding
@@ -672,9 +676,7 @@ test("a member without Agent operate sees workspace Saves unavailable with the r
   assert.deepEqual(writes, []);
 });
 
-const DIAGNOSTICS_DENIED = "Your access does not include running diagnostics for this Agent.";
-const STOP_REFUSED =
-  "You do not have permission to stop this Agent. Ask an administrator for Agent operate access.";
+const STOP_REFUSED = stopRefused("this Agent");
 
 // The page's other operate-gated controls follow the same observed answer as Workspace: the Stop
 // row hides and each version's Run diagnostics disables while operate is denied (finding 2328).
@@ -860,7 +862,7 @@ test("a Stop refusal clears once a later answer grants Agent operate", async (t)
   await page.unroute(scenario.permissionsUrl);
   await scenario.rememberStatusDenial();
   // The row stays because this viewer used it; the denial disables Stop and adds its notice.
-  const notice = stopRow.getByText("Your access does not include stopping this Agent.");
+  const notice = stopRow.getByText(AGENT_STOP_DENIED);
   await scenario.rereadThroughLogs();
   await notice.waitFor();
   scenario.operate(true);

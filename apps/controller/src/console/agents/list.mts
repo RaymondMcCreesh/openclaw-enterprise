@@ -8,6 +8,12 @@ import type { Static } from "typebox";
 import { GENERIC_DENIAL, namedDenial, requestFailure, responseFields } from "../api-client.mjs";
 import { element } from "../dom.mjs";
 import type { createNavigation } from "../navigation.mjs";
+import {
+  ASK_INSTALLATION_ADMINISTRATOR,
+  askAdministratorTo,
+  askForGrant,
+  notIncluded,
+} from "./access-reasons.mjs";
 
 export const displayDate = (value: string) => new Date(value).toLocaleString();
 export const shortId = (value: string) => `${value.slice(0, 12)}…${value.slice(-6)}`;
@@ -83,15 +89,12 @@ export const NAMESPACE_MISSING = Object.freeze({
 // untyped conflict. They name nothing the caller can act on, so views keep their own guidance
 // instead of showing them.
 export { GENERIC_DENIAL };
-// Why Create Agent is disabled for a caller without Agent create. Namespace Roles cannot grant
-// people Agent create, so it names who can create the Agent instead (findings 2496, 2508).
-export const AGENT_CREATE_DENIED =
-  "Your access does not include creating Agents in this Namespace. Only an Installation administrator can create Agents: ask one to create it and to give you access to edit and deploy it.";
 export const GENERIC_CONFLICT = "The requested platform resource already exists.";
 
-// Granting access writes Namespace IAM policy, which only Installation administration may do (UX
-// plan A2). Every message that sends a reader to have access granted names that role in these
-// words (findings 1920, 2259, 2260).
+// Granting an Agent a credential writes Namespace IAM policy, which only Installation
+// administration may do (UX plan A2); credentials.mts words its grant steps with this.
+// TODO: when #3686 lands, word those steps with askAdministratorTo (access-reasons.mts) and
+// remove this, so one module words every ask (finding 2578).
 export const askInstallationAdministrator = (task: string) =>
   `needs Installation administration access: ask an Installation administrator to ${task}.`;
 
@@ -108,16 +111,12 @@ export interface AccessNeed {
 // Namespace lists (Secrets, Presets, ServiceAccounts) check Namespace read, then read on each item:
 // a 403 is the Namespace read, and an item the caller may not read is left out instead.
 export const namespaceListNeed = (items: string): AccessNeed => ({
-  task: `Listing ${items} in this Namespace`,
+  task: `listing ${items} in this Namespace`,
   grant: "Namespace read",
 });
 
 // A 403 that names no grant. message() adds who grants access; administratorMessage() does not.
 const PLAIN_ACCESS_DENIED = "Access denied. You do not have permission for this operation.";
-
-export function accessDenied({ task, grant }: AccessNeed) {
-  return `Access denied. ${task} needs ${grant}, which your access does not include. Granting it ${askInstallationAdministrator("check that grant")}`;
-}
 
 // The API records these deployment endings as failed, but nothing went wrong with the version,
 // so the console shows a neutral outcome instead. A newer version took over before this one
@@ -194,7 +193,7 @@ export function message(cause: unknown, mutation = false, need?: AccessNeed): st
       configuration: "native configuration",
     };
     const field = typeof error.field === "string" ? fieldLabels[error.field] : undefined;
-    return `Saved ${field ?? "configuration"} could not be read. Editing and deployment are unavailable for these settings. Ask an administrator to repair the saved configuration, then refresh this page.`;
+    return `Saved ${field ?? "configuration"} could not be read. Editing and deployment are unavailable for these settings. ${askAdministratorTo("repair the saved configuration, then refresh this page")}`;
   }
   if (error.status === 403) {
     // A view's own refusal or grant names the task in its words; without one, the API's named
@@ -202,9 +201,9 @@ export function message(cause: unknown, mutation = false, need?: AccessNeed): st
     return typeof error.refusal === "string"
       ? error.refusal
       : need
-        ? accessDenied(need)
+        ? notIncluded(need.task, need.grant)
         : (namedDenial(cause) ??
-          `${PLAIN_ACCESS_DENIED} Granting it ${askInstallationAdministrator("check your access")}`);
+          `${PLAIN_ACCESS_DENIED} ${askAdministratorTo("check your access")}`);
   }
   if (error.status === 404) {
     return "Resource unavailable in this Namespace. Check the ID and your access.";
@@ -267,13 +266,17 @@ export function preAdmissionRefusal(cause: unknown) {
 // shows one fixed text for every 403, so it says nothing the server did not: no IDs, and nothing
 // about whether a resource exists.
 export const SAVE_REFUSALS = Object.freeze({
-  configuration:
-    "You do not have permission to save this Configuration. Ask an administrator for Configuration update access, plus Secret operate on each Secret it binds.",
-  agent:
-    "You do not have permission to save this Agent. Ask an administrator for Agent update and Configuration read access, plus access to the Secrets, credential sources and Service Account it binds.",
+  configuration: `You do not have permission to save this Configuration. ${askForGrant(
+    "Configuration update on it, plus Secret operate on each Secret it binds",
+  )}`,
+  agent: `You do not have permission to save this Agent. ${askForGrant(
+    "Agent update and Configuration read on it, plus access to the Secrets, credential sources and Service Account it binds",
+  )}`,
   // A save first rereads the Agent and its Configuration; a refused read is not a refused
   // update (finding 1540).
-  read: "You do not have permission to read this Agent's saved settings. Ask an administrator for Agent read and Configuration read access.",
+  read: `You do not have permission to read this Agent's saved settings. ${askForGrant(
+    "Agent read and Configuration read on it",
+  )}`,
 });
 
 // A refused save that binds Secrets a permission answer read after the refusal says the caller
@@ -283,26 +286,25 @@ export function secretOperateRefusal(names: readonly string[]) {
   const them = names.length > 1 ? "them" : "it";
   const listed =
     names.length < 2 ? names.join("") : `${names.slice(0, -1).join(", ")} and ${names.at(-1)}`;
-  return `You do not have permission to bind ${listed}. Each save needs Secret operate on every Secret it binds, which your access does not include for ${them}. Choose another Secret, or ask an administrator for Secret operate on ${them}.`;
+  return `You do not have permission to bind ${listed}. Each save needs Secret operate on every Secret it binds, which your access does not include for ${them}. Choose another Secret, or ${ASK_INSTALLATION_ADMINISTRATOR} for Secret operate on ${them}.`;
 }
 
 // Shown beside Agent-side save controls when the caller's permission answer denies Agent update.
 // Gating only: an unknown answer keeps the controls, and the API still decides.
-export const AGENT_UPDATE_DENIED =
-  "Your access does not include updating this Agent. Ask an administrator for Agent update access to save these settings.";
+export const AGENT_UPDATE_DENIED = notIncluded(
+  "saving these settings",
+  "Agent update on this Agent",
+);
 // Shown instead when the answer allows Agent update but not the Configuration read each Agent
 // update needs; the source note would name the wrong grant.
-export const AGENT_CONFIGURATION_READ_DENIED =
-  "Saving these settings needs read access to this Agent's Configuration, which your access does not include. Ask an administrator for Configuration read access.";
+export const AGENT_CONFIGURATION_READ_DENIED = `Saving these settings needs read access to this Agent's Configuration, which your access does not include. ${askForGrant("Configuration read on it")}`;
 // Shown instead when the answer allows Agent update but not the source grants each Agent update
 // also checks on what the Agent and its Configuration bind (finding 2441).
-export const AGENT_SOURCES_DENIED =
-  "Saving these settings needs operate on each Secret and credential source this Agent and its Configuration bind, which your access does not include. Ask an administrator for that access.";
+export const AGENT_SOURCES_DENIED = `Saving these settings needs operate on each Secret and credential source this Agent and its Configuration bind, which your access does not include. ${askForGrant("that access")}`;
 // Shown instead when the Agent uses a ServiceAccount for Harness authentication: each Agent update
 // also checks read on it, and the answer does not say which of the grants is missing (finding
 // 2459).
-export const AGENT_SOURCES_SERVICE_ACCOUNT_DENIED =
-  "Saving these settings needs operate on each Secret and credential source this Agent and its Configuration bind, and read on the ServiceAccount it uses for Harness authentication. Your access does not include all of them. Ask an administrator for that access.";
+export const AGENT_SOURCES_SERVICE_ACCOUNT_DENIED = `Saving these settings needs operate on each Secret and credential source this Agent and its Configuration bind, and read on the ServiceAccount it uses for Harness authentication. Your access does not include all of them. ${askForGrant("that access")}`;
 
 // Why the permission answer says an Agent-side save would be refused, or undefined when it allows
 // the save or is unknown. Each Agent update also needs Configuration read and checks the caller's

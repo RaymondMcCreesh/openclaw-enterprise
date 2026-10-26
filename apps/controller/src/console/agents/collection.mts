@@ -18,6 +18,12 @@ import {
 } from "./lifecycle-confirmation.mjs";
 import {
   AGENT_CREATE_DENIED,
+  AGENT_DELETE_DENIED,
+  AGENT_STOP_DENIED,
+  askForGrant,
+  notIncluded,
+} from "./access-reasons.mjs";
+import {
   type AgentNavigation,
   NAMESPACE_MISSING,
   NAMESPACE_RECHECK_MS,
@@ -188,6 +194,9 @@ export function renderAgentList(context: AgentListContext) {
   // Agents whose last row action had a conflicting or unconfirmed outcome. Their actions stay
   // disabled until Refresh rereads the list, so the console never repeats an uncertain write.
   const unsettled = new Set<string>();
+  // Agents whose latest deployment failed before any version was selected: as on Agent detail,
+  // nothing runs, so there is nothing to stop (finding 2385).
+  const failedFirstDeployments = new Set<string>();
   const rowControls = new Map<
     string,
     ReturnType<typeof rowActions> & {
@@ -371,6 +380,17 @@ export function renderAgentList(context: AgentListContext) {
           return;
         }
         const neutral = neutralDeploymentOutcome(result.status);
+        // Each read decides again: a retained list rereads on resume, and a first deployment
+        // retried since then (queued or deploying) keeps Stop, as on Agent detail (finding 2580).
+        const failedFirst = !neutral && result.status.status === "failed" && !item.activeRevisionId;
+        if (failedFirst !== failedFirstDeployments.has(item.id)) {
+          if (failedFirst) {
+            failedFirstDeployments.add(item.id);
+          } else {
+            failedFirstDeployments.delete(item.id);
+          }
+          updateRowActions(item.id);
+        }
         const failure =
           !neutral && result.status.status === "failed"
             ? (result.status.error?.message ?? "Deployment failed.")
@@ -500,8 +520,8 @@ export function renderAgentList(context: AgentListContext) {
     if (error.status === 403) {
       text =
         kind === "stop"
-          ? `You do not have permission to stop ${item.name}. Ask an administrator for Agent operate access.`
-          : `You do not have permission to delete ${item.name}. Ask an administrator for Agent delete access.`;
+          ? `You do not have permission to stop ${item.name}. ${askForGrant("Agent operate on it")}`
+          : `You do not have permission to delete ${item.name}. ${askForGrant("Agent delete on it")}`;
     } else if (error.status === 400 || error.status === 429) {
       text = `Could not ${kind === "stop" ? "stop" : "delete"} ${item.name}. ${describeFailure(cause, { mutation: true })}`;
     } else {
@@ -608,9 +628,7 @@ export function renderAgentList(context: AgentListContext) {
         return;
       }
       confirm.disabled = true;
-      description.textContent = stopping
-        ? "Your access does not include stopping this Agent."
-        : "Your access does not include deleting this Agent.";
+      description.textContent = stopping ? AGENT_STOP_DENIED : AGENT_DELETE_DENIED;
       cancel.focus();
     };
     restrictOpenDialog = restrict;
@@ -659,21 +677,33 @@ export function renderAgentList(context: AgentListContext) {
     // A deleting Agent keeps its retry and status controls on its detail page.
     const available = item.status !== "deleting" && !unsettled.has(item.id);
     const stopped = item.desiredRuntimeState === "stopped";
-    // New Agents start stopped with no version, so there is nothing to stop yet; Agent detail
-    // shows no Stop control then either.
-    const neverStarted = stopped && !item.activeRevisionId;
+    // New Agents start stopped with no version, and a first deployment that failed selects none,
+    // so there is nothing to stop yet; Agent detail shows no Stop control then either.
+    const neverStarted = !item.activeRevisionId && (stopped || failedFirstDeployments.has(item.id));
     const allowed = permissions.get(item.id);
     const canStop = neverStarted || allowed?.operate !== false;
     const canDelete = allowed?.delete !== false;
     const noteId = `agent-row-note-${item.id}`;
     const badgeId = `agent-row-badge-${item.id}`;
+    // The note names the grant and who gives it (findings 2539, 2548). Its reserved line fits
+    // only the grant, so the line shows that and the whole reason is its tooltip and what
+    // assistive technology reads.
     let restriction = null;
+    let grant = null;
     if (!canStop && !canDelete) {
-      restriction = "No access to stop or delete";
+      restriction = notIncluded(
+        "stopping or deleting this Agent",
+        "Agent operate and Agent delete on it",
+      );
+      // "Needs Agent operate and delete" overflows the reserved line on a 1280-pixel viewport;
+      // the tooltip and the description name both grants in full.
+      grant = "Needs operate and delete";
     } else if (!canStop) {
-      restriction = "No access to stop";
+      restriction = AGENT_STOP_DENIED;
+      grant = "Needs Agent operate";
     } else if (!canDelete) {
-      restriction = "No access to delete";
+      restriction = AGENT_DELETE_DENIED;
+      grant = "Needs Agent delete";
     }
     const describedBy = (blocked: boolean, badge: string | null) => {
       const ids = [blocked ? noteId : null, badge].filter(Boolean);
@@ -708,7 +738,12 @@ export function renderAgentList(context: AgentListContext) {
     const note = element(
       "span",
       { className: "row-action-note", id: noteId, ...(restriction ? { title: restriction } : {}) },
-      restriction ?? "",
+      ...(restriction
+        ? [
+            element("span", { "aria-hidden": "true" }, grant ?? ""),
+            element("span", { className: "visually-hidden" }, restriction),
+          ]
+        : []),
     );
     return { stop, delete: remove, note };
   }

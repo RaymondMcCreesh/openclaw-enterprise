@@ -41,6 +41,65 @@ export const NAMESPACE_NAME_CONFLICT =
 // grant people (findings 2496, 2508).
 export const AGENT_CREATE_DENIED =
   "Your access does not include creating Agents in this Namespace. Only an Installation administrator can create Agents: ask one to create it and to give you access to edit and deploy it.";
+// Secrets and Namespaces follow the same rule: Namespace Roles cannot grant people create.
+export const SECRET_CREATE_DENIED =
+  "Your access does not include creating Secrets in this Namespace. Only an Installation administrator can create Secrets: ask one to create it and to give you Secret read and operate on it.";
+export const CONSOLE_NAMESPACE_CREATE_DENIED =
+  "Your access does not include creating Namespaces in this Installation. Only an Installation administrator can create Namespaces: ask one to create a Namespace or to give you access to an existing one.";
+
+// The console's reasons for a control disabled, or a request refused, for lack of a grant
+// (findings 2539, 2578): what the reader's access does not include, then the grant to ask an
+// Installation administrator for, in the permissions cheat sheet's words.
+export const askForGrant = (grant) => `Ask an Installation administrator for ${grant}.`;
+export const notIncluded = (task, grant) =>
+  `Your access does not include ${task}. ${askForGrant(grant)}`;
+export const AGENT_STOP_DENIED = notIncluded("stopping this Agent", "Agent operate on it");
+export const AGENT_DELETE_DENIED = notIncluded("deleting this Agent", "Agent delete on it");
+export const AGENT_STOP_AND_DELETE_DENIED = notIncluded(
+  "stopping or deleting this Agent",
+  "Agent operate and Agent delete on it",
+);
+// A refused Stop names the Agent on the Agents list and "this Agent" on its page.
+export const stopRefused = (name) =>
+  `You do not have permission to stop ${name}. ${askForGrant("Agent operate on it")}`;
+export const CONFIGURATION_UPDATE_DENIED = notIncluded(
+  "editing this Configuration",
+  "Configuration update on it",
+);
+export const DIAGNOSTICS_DENIED = notIncluded(
+  "running diagnostics for this Agent",
+  "Agent operate on it",
+);
+export const WORKSPACE_SAVE_DENIED = notIncluded(
+  "saving this Agent's workspace files",
+  "Agent operate on it",
+);
+export const SANDBOX_POLICY_READ_DENIED = notIncluded(
+  "reading this Agent’s network policy or its suggestions",
+  "SandboxPolicy read on it",
+);
+// Agent-side save controls, from the caller's permission answer (findings 2441, 2459).
+export const AGENT_UPDATE_DENIED = notIncluded(
+  "saving these settings",
+  "Agent update on this Agent",
+);
+export const AGENT_SOURCES_DENIED =
+  "Saving these settings needs operate on each Secret and credential source this Agent and its Configuration bind, which your access does not include. Ask an Installation administrator for that access.";
+// Device login from Create Agent (Namespace-scoped) and from Agent detail (Agent-scoped): a start
+// creates a Secret and a credential source, which only an Installation administrator can create;
+// a poll or cancel checks the scope again plus operate on the login's Secret (finding 2577).
+const DEVICE_LOGIN_START_REMEDY =
+  "which only an Installation administrator holds: choose another authentication method, or ask one to set up this sign-in.";
+export const DEVICE_LOGIN_START_DENIED = `Your access does not include starting a device login in this Namespace. It needs Agent create, Secret create and credential source create here, ${DEVICE_LOGIN_START_REMEDY}`;
+export const AGENT_DEVICE_LOGIN_START_DENIED = `Your access does not include starting a device login for this Agent. It needs Agent read and update on it, plus Secret create and credential source create in this Namespace, ${DEVICE_LOGIN_START_REMEDY}`;
+export const AGENT_DEVICE_LOGIN_POLL_DENIED = notIncluded(
+  "finishing this device login",
+  "Agent read and update on this Agent, plus Secret operate on the login's Secret and credential source operate on its credential source",
+);
+export const AGENT_DEVICE_LOGIN_CANCEL_DENIED = notIncluded(
+  "cancelling this device login",
+  "Agent read and update on this Agent, plus Secret operate on the login's Secret",
+);
 
 // Kubernetes Compute refuses a Dedicated Agent the Installation cannot place (no gateway routing
 // or node enrollment) at Agent save, provisioning and Create Agent's preflight. A Codex Agent
@@ -51,35 +110,32 @@ export const CODEX_PLACEMENT_REFUSAL = `${DEDICATED_PLACEMENT_REQUIREMENT} Codex
 
 // Console refusals for a save the caller may not make.
 export const AGENT_SAVE_DENIED =
-  "You do not have permission to save this Agent. Ask an administrator for Agent update and Configuration read access, plus access to the Secrets, credential sources and Service Account it binds.";
+  "You do not have permission to save this Agent. Ask an Installation administrator for Agent update and Configuration read on it, plus access to the Secrets, credential sources and Service Account it binds.";
 export const CONFIGURATION_SAVE_DENIED =
-  "You do not have permission to save this Configuration. Ask an administrator for Configuration update access, plus Secret operate on each Secret it binds.";
+  "You do not have permission to save this Configuration. Ask an Installation administrator for Configuration update on it, plus Secret operate on each Secret it binds.";
 // A Secret field lists a Secret the caller may read but not operate disabled, with this reason,
 // and a save refused on one a fresh answer names says so (finding 2453).
 export const SECRET_OPERATE_DENIED =
-  "Binding it needs Secret operate, which your access does not include.";
+  "Binding it needs Secret operate, which your access does not include. Ask an Installation administrator for Secret operate on it.";
 // Create Agent's Create new Secret choice and typed model key, for a caller whose Secret operate
 // covers only some Secrets: a new Secret gets no operate grant of its own (finding 2492).
 export const NEW_SECRET_OPERATE_DENIED =
   "Your access includes Secret operate on only some Secrets in this Namespace, so an Agent cannot use a new Secret you create here.";
 // What an administrator can grant instead: Secret operate on one exact Secret (finding 2507).
 export const NEW_SECRET_OPERATE_REMEDY =
-  "To use a new Secret, create it on the Secrets page, then ask an administrator to grant you Secret operate on that Secret.";
+  "To use a new Secret, create it on the Secrets page, then ask an Installation administrator for Secret operate on it.";
 // The console's 403 for a read that names its grant, and for one that names none. Granting access
 // is Installation administration (findings 1920, 2259, 2260).
-const ASK_INSTALLATION_ADMINISTRATOR =
-  "needs Installation administration access: ask an Installation administrator to";
-export const accessDeniedNeeding = (task, grant) =>
-  `Access denied. ${task} needs ${grant}, which your access does not include. Granting it ${ASK_INSTALLATION_ADMINISTRATOR} check that grant.`;
 // A Namespace list (Secrets, Presets, Service Accounts) is refused for lack of Namespace read.
 export const namespaceListDenied = (items) =>
-  accessDeniedNeeding(`Listing ${items} in this Namespace`, "Namespace read");
+  notIncluded(`listing ${items} in this Namespace`, "Namespace read");
 // What an Installation administrator's own refused request says: asking one would not help.
 export const ADMINISTRATOR_ACCESS_DENIED =
   "Access denied. You do not have permission for this operation.";
-export const CONSOLE_ACCESS_DENIED = `Access denied. You do not have permission for this operation. Granting it ${ASK_INSTALLATION_ADMINISTRATOR} check your access.`;
+export const CONSOLE_ACCESS_DENIED =
+  "Access denied. You do not have permission for this operation. Ask an Installation administrator to check your access.";
 export const secretOperateRefused = (name) =>
-  `You do not have permission to bind ${name}. Each save needs Secret operate on every Secret it binds, which your access does not include for it. Choose another Secret, or ask an administrator for Secret operate on it.`;
+  `You do not have permission to bind ${name}. Each save needs Secret operate on every Secret it binds, which your access does not include for it. Choose another Secret, or ask an Installation administrator for Secret operate on it.`;
 
 // The console's text for a read that failed with a 5xx.
 export const READ_UNAVAILABLE = "Service unavailable. The read could not be completed. Try again.";
