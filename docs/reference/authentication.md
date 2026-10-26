@@ -259,10 +259,10 @@ or infer grants. Audit records `principalId` and `roleId` or `grant: "none"`.
 Creation issues no session.
 
 The only Installation Role is the built-in Installation administrator
-(`role_admin_<uuid>`). The API cannot create other Installation Roles, and the
-Namespace policy API does not list this one. Omit `roleId` for everyone except
-another Installation administrator, then grant Namespace access with the
-returned `principalId`; see [Add a person](../guides/topics/iam.md#add-a-person).
+(`role_admin_<uuid>`). No API creates another, and the Namespace policy API
+omits this one. Its Installation-scoped binding grants only
+`installation:administer` and `installation:read`; see
+[Appoint an administrator](../guides/topics/iam.md#appoint-an-administrator).
 A representative provisioning body is:
 
 ```json
@@ -273,8 +273,7 @@ A representative provisioning body is:
 ```
 
 Emails are normalized to lowercase. Passwords must contain 12–128 characters.
-Provisioning has no public email-verification or signup flow; duplicates are
-rejected.
+Duplicates are rejected; there is no email verification.
 
 ## Authorization and failures
 

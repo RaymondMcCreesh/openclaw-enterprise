@@ -127,9 +127,34 @@ nobody uses. It is still a credential:
 Add actions such as `update` or `deploy` to the Role for more access; see
 [Authorization](../../reference/authorization.md) for actions and scope. Role
 creation refuses `create` Permissions, and a binding refuses a Role with none
-for its target's kind, because those grants could never apply. Pass the
-Installation administrator `roleId` at creation only for someone who
-administers the whole Installation.
+for its target's kind, because those grants could never apply.
+
+Use Namespace bindings for everyone who is not an Installation administrator.
+
+## Appoint an administrator
+
+Pass the Installation administrator `roleId` in the account creation body (step
+2 of [Add a person](#add-a-person)). The binding is scoped to the exact
+Installation, while the bootstrap administrator's binding is unscoped, so the
+appointed account holds only `installation:administer` and `installation:read`:
+
+- It can create accounts, read the Installation, Backends and the observability
+  link, and
+  [issue service keys](../../reference/authentication/service-api-keys.md#issuance)
+  for principals whose grants it already holds.
+- Its Namespace list is empty. It cannot create or read Namespaces, create
+  Secrets, credential sources or Agents, start a device login, read the
+  deployment inventory, or change Namespace IAM. Each refusal is a `403`
+  audited as an authorization denial, and its message still says to ask an
+  Installation administrator.
+- To let it manage IAM in one Namespace, the bootstrap administrator binds it
+  there to a Role with `namespace:read`, as in step 4 of
+  [Add a person](#add-a-person). Namespace IAM writes then work in that
+  Namespace; Namespace creation stays refused.
+
+Appoint one only for account and service-key administration. The draft
+[RFC in PR #889](https://github.com/openclaw/openclaw-enterprise/pull/889)
+proposes a change to this behavior.
 
 ## Remove a person
 
