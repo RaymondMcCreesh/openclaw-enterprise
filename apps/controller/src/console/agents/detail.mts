@@ -2247,10 +2247,14 @@ export async function renderAgentDetail(
           : "",
       );
       setLiveServing(false);
-      stopPanel.setNothingRunning(false);
+      // This viewer reads no deployment, so Stop keeps its row and says it may cancel one or
+      // interrupt a gateway (finding D691); the API answers if nothing runs.
+      stopPanel.setLatestDeployment(null);
       return;
     }
-    stopPanel.setNothingRunning(latestDeploymentStatus === "failed" && !currentRevisionId);
+    // Stop hides only for a failed first deployment, and says it cancels one still queued or in
+    // progress (findings 2385, 2580, D691). A failed read is unknown, not failed.
+    stopPanel.setLatestDeployment(latestDeploymentStatus);
     const label = latestDeploymentStatus ? outcomeLabel(latestDeploymentStatus) : undefined;
     // A superseded or stopped deployment is neutral: it raises no banner and says nothing about
     // serving.
