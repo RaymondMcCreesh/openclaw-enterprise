@@ -118,6 +118,10 @@ export const UnreadableAgentConfiguration = story("unreadableAgentConfiguration"
 export const UnreadableRevisionConfiguration = story("unreadableRevisionConfiguration");
 export const RevisionError = { ...story("revisionError"), name: "Revision history unavailable" };
 export const DeployDenied = { ...story("deployDenied"), name: "Deployment denied" };
+export const TabLinkUnavailable = {
+  ...story("tabLinkUnavailable"),
+  name: "Link to an unavailable tab",
+};
 export const DeploySecretOperateDenied = {
   ...story("deploySecretOperateDenied"),
   name: "Deployment needs Secret operate",
