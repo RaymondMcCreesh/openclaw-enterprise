@@ -1090,27 +1090,27 @@ const config = {
 };
 const profile = ":danger-full-access";
 const providerEnv = { OPENCLAW_CODEX_PROVIDER_PERMISSION_PROFILE: profile };
-function permissionFields(appServer, sandboxPolicy) {
+async function permissionFields(appServer, sandboxPolicy) {
   const thread = threadPermissions(appServer);
-  const turn = buildTurnStartParams({ prompt: "policy check", hostCapabilities: {}, config }, {
+  const turn = await buildTurnStartParams({ prompt: "policy check", hostCapabilities: {}, config }, {
     appServer, sandboxPolicy, cwd: "/tmp", preserveNativeTurnSettings: true,
   });
   return [thread, turn.permissions ?? turn.sandboxPolicy?.type];
 }
-const results = JSON.parse(process.argv[1]).map(({ appServer, modelProvider }) => {
+const results = await Promise.all(JSON.parse(process.argv[1]).map(async ({ appServer, modelProvider }) => {
   const resolve = (env) => resolveCodexAppServerRuntimeOptions({
     pluginConfig: { appServer }, modelProvider, model: "gpt-6-astra", config, env, requirementsToml: null,
   });
   const runtime = resolve(providerEnv);
-  assert.deepEqual(permissionFields(runtime), [{ permissions: profile }, profile]);
+  assert.deepEqual(await permissionFields(runtime), [{ permissions: profile }, profile]);
   const local = resolve({});
-  assert.deepEqual(permissionFields(local), [{ sandbox: "danger-full-access" }, "dangerFullAccess"]);
+  assert.deepEqual(await permissionFields(local), [{ sandbox: "danger-full-access" }, "dangerFullAccess"]);
   const restricted = { ...runtime, sandbox: "workspace-write" };
-  assert.deepEqual(permissionFields(restricted), [{ sandbox: "workspace-write" }, "workspaceWrite"]);
-  assert.deepEqual(permissionFields({ ...runtime, networkProxy: {} }), [{}, undefined]);
-  assert.equal(permissionFields(runtime, { type: "readOnly" })[1], "readOnly");
+  assert.deepEqual(await permissionFields(restricted), [{ sandbox: "workspace-write" }, "workspaceWrite"]);
+  assert.deepEqual(await permissionFields({ ...runtime, networkProxy: {} }), [{}, undefined]);
+  assert.equal((await permissionFields(runtime, { type: "readOnly" }))[1], "readOnly");
   return { sandbox: runtime.sandbox, approvalsReviewer: runtime.approvalsReviewer };
-});
+}));
 
 // A real Codex can accept thread/start yet constrain its effective sandbox. The bundled
 // Gateway client must surface that refusal before the caller can use the thread for a turn.
@@ -1779,16 +1779,14 @@ assert.equal(provenance.source, "https://github.com/openclaw/openclaw");
 const expectedSource = JSON.parse(process.argv[2]);
 assert.equal(provenance.commit, expectedSource.commit);
 assert.equal(provenance.sourceArchiveSha256, expectedSource.sourceArchiveSha256);
-assert.equal(provenance.openclawBridgePatchSha256, "1d8b670e7029872262375a21da7222768c2fe2390ff7a159ed1616ee9c9de1ca");
-assert.equal(provenance.openclawConnectPatchSha256, "906fd14d2d36b98c4308d4db65f30092f27b84a69e5509cf04de2041f6e975d2");
-assert.equal(provenance.codexDependencyPinPatchSha256, "7bb0ae29bf3259b245d7675b2c6a3abe521c8139095f75ce0c532188162de5e9");
-assert.equal(provenance.openclawRequiredWorkerAuthorityPatchSha256, "d07be9735250a5fb8be69086a96d4959f02caaeec6dc31990c03eed959bd17d8");
+assert.equal(provenance.openclawBridgePatchSha256, "2e529593cb72c69be86cf7bb927aa555de50bc7ef923e80b37ba67df9bc1a624");
+assert.equal(Object.hasOwn(provenance, "openclawConnectPatchSha256"), false);
+assert.equal(provenance.codexDependencyPinPatchSha256, "686dcb3fcdd384150845f7af5b5f3bf46b2dc6ee24ab8f5b629b10566e18afd4");
+assert.equal(provenance.openclawRequiredWorkerAuthorityRegressionPatchSha256, "0fda64033083d4db4ba13b823445ded303cdcd4d392ecf0d2413b19f7516bc66");
 // The patches the per-patch fields above omit; runtime-assets.test.mjs checks the full set.
-assert.equal(provenance.patches["openclaw-codex-preserve-on-request.patch"], "ef50d1e635be0a9afd970ee1ea95c3468c307759fedd3783180ac2a676fa015b");
-assert.equal(provenance.patches["openclaw-codex-full-access-profile.patch"], "bf0e9cd6d1d2420f42a33af130d534e1de6d1fe17701517c676824f5e80ec931");
-assert.equal(provenance.patches["openclaw-required-worker-authority-regression.patch"], "1998cdd2321a68f97afb96470dcfb989a1460484c831b113b3af22dcabbf6189");
-assert.equal(provenance.patches["openclaw-control-ui-browser-reconnect.patch"], "964c500f981f343d8c131a213aad65ea47e2de4a9a5d11dbb57c3f30bead7065");
-assert.equal(Object.keys(provenance.patches).length, 8);
+assert.equal(provenance.patches["openclaw-codex-full-access-profile.patch"], "ce301e59ba9266f7897c472cd54d51f487a4f9ed75034824f48c6839b35e922f");
+assert.equal(provenance.patches["openclaw-control-ui-browser-reconnect.patch"], "6a47120be7057dfbb0efad0096730fbad36db9739f8c9235afd3eed51be35e91");
+assert.equal(Object.keys(provenance.patches).length, 5);
 assert.equal(provenance.codex.version, "0.163.0-alpha.2");
 assert.equal(Object.hasOwn(provenance, "codexPatchSha256"), false);
 assert.equal(Object.hasOwn(provenance, "codexVersion"), false);

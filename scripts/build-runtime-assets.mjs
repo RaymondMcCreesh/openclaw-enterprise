@@ -22,39 +22,26 @@ import { readOpenclawSource } from "./lib/openclaw-source.mjs";
 const appliedPatches = [
   {
     file: "openclaw-codex-read-only-paths.patch",
-    sha256: "1d8b670e7029872262375a21da7222768c2fe2390ff7a159ed1616ee9c9de1ca",
+    sha256: "2e529593cb72c69be86cf7bb927aa555de50bc7ef923e80b37ba67df9bc1a624",
     field: "openclawBridgePatchSha256",
   },
   {
-    file: "openclaw-codex-preserve-on-request.patch",
-    sha256: "ef50d1e635be0a9afd970ee1ea95c3468c307759fedd3783180ac2a676fa015b",
-  },
-  {
-    file: "openclaw-connect-ephemeral-expired-setup.patch",
-    sha256: "906fd14d2d36b98c4308d4db65f30092f27b84a69e5509cf04de2041f6e975d2",
-    field: "openclawConnectPatchSha256",
-  },
-  {
     file: "openclaw-codex-full-access-profile.patch",
-    sha256: "bf0e9cd6d1d2420f42a33af130d534e1de6d1fe17701517c676824f5e80ec931",
+    sha256: "ce301e59ba9266f7897c472cd54d51f487a4f9ed75034824f48c6839b35e922f",
   },
   {
     file: "stock-codex-0.163.0-alpha.2-dependency-pin.patch",
-    sha256: "7bb0ae29bf3259b245d7675b2c6a3abe521c8139095f75ce0c532188162de5e9",
+    sha256: "686dcb3fcdd384150845f7af5b5f3bf46b2dc6ee24ab8f5b629b10566e18afd4",
     field: "codexDependencyPinPatchSha256",
   },
   {
-    file: "openclaw-required-worker-authority.patch",
-    sha256: "d07be9735250a5fb8be69086a96d4959f02caaeec6dc31990c03eed959bd17d8",
-    field: "openclawRequiredWorkerAuthorityPatchSha256",
-  },
-  {
     file: "openclaw-required-worker-authority-regression.patch",
-    sha256: "1998cdd2321a68f97afb96470dcfb989a1460484c831b113b3af22dcabbf6189",
+    sha256: "0fda64033083d4db4ba13b823445ded303cdcd4d392ecf0d2413b19f7516bc66",
+    field: "openclawRequiredWorkerAuthorityRegressionPatchSha256",
   },
   {
     file: "openclaw-control-ui-browser-reconnect.patch",
-    sha256: "964c500f981f343d8c131a213aad65ea47e2de4a9a5d11dbb57c3f30bead7065",
+    sha256: "6a47120be7057dfbb0efad0096730fbad36db9739f8c9235afd3eed51be35e91",
   },
 ];
 const [command, sourceRoot, output, sourceManifest] = process.argv.slice(2);
@@ -66,16 +53,21 @@ const runtimePaths = [
   "pnpm-lock.yaml",
   "pnpm-workspace.yaml",
   "patches",
+  "scripts",
   "node-version.mjs",
   "node-sqlite.mjs",
   "node-runtime-update.mjs",
   "node-runtime-recovery.mjs",
   "node-runtime-env.mjs",
+  "cli-invocation.mjs",
+  "cli-parent-lifetime.mjs",
   "cli-root-options.mjs",
+  "gateway-prewarm.mjs",
   "gateway-run-argv.mjs",
   "gateway-shutdown-budget.mjs",
   "node-host-launcher.mjs",
   "node-compile-cache.mjs",
+  "worker-heap-flag.mjs",
   "openclaw.mjs",
   "extensions",
   "skills",
@@ -225,10 +217,15 @@ if (command === "inputs") {
   )
     .trim()
     .split("\n");
+  await writeFile(join(output, "openclaw-workspace-plugin-dirs"), `${selected.join("\n")}\n`);
+  // Upstream asset preparation builds external plugin assets before pruning.
+  // Keep their build dependencies here; the production install stays selected.
   for (const dir of [
     "ui",
+    "examples/ai-chat",
+    "tools/solid-lint",
     ...(await readdir(join(root, "packages"))).map((name) => `packages/${name}`),
-    ...selected.map((name) => `extensions/${name}`),
+    ...(await readdir(join(root, "extensions"))).map((name) => `extensions/${name}`),
   ]) {
     try {
       const manifest = await readFile(join(root, dir, "package.json"));

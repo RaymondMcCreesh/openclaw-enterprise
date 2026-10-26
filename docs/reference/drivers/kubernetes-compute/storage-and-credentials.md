@@ -58,8 +58,11 @@ writer.
 A stop deletes the Gateway and waits for its Pod to disappear before stopping the
 Harness, which finishes active work meanwhile; a refused candidate's stop deletes
 both at once. The Gateway supervisor and Pod allow up to 330 seconds for the
-pinned runtime's drain and cleanup; idle Gateways exit promptly. Forced termination can leave an owner lease until it
-expires and delay the successor; a longer grace period does not make it a clean shutdown.
+pinned runtime's drain and cleanup; idle Gateways exit promptly. Forced termination
+can leave an unverifiable owner lease that blocks the successor. A platform operator
+must confirm the predecessor stopped or fence it before
+[lock recovery](https://github.com/openclaw/openclaw/blob/9cc4450e9d79a993a51dc6fa362468f46c6f1819/docs/cli/gateway/running.md#recover-an-unverifiable-state-lock).
+Age alone cannot authorize takeover.
 
 Only the Gateway Pod mounts these writable directories, including SQLite
 databases and their WAL/SHM siblings:

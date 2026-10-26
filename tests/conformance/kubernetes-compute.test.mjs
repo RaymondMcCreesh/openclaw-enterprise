@@ -24,6 +24,7 @@ import {
   PROTECTED_CODEX_WITH_NODE_ENTRYPOINT,
   RUNTIME_WRAPPER_COMMAND,
   SETUP_WRAPPER_COMMAND,
+  gatewayRuntimeEntrypoint,
 } from "../../apps/controller/src/drivers/compute/kubernetes/runtime-entrypoints.ts";
 import {
   nodeProgramArguments,
@@ -419,6 +420,9 @@ test("gateway readiness waits for the updated replica to replace the old ready p
 
   assert.equal(await driver.gatewayReady(ownership, name, namespace), false);
   deployment.status.replicas = 1;
+  deployment.status.observedGeneration = 1;
+  assert.equal(await driver.gatewayReady(ownership, name, namespace), false);
+  deployment.status.observedGeneration = 2;
   assert.equal(await driver.gatewayReady(ownership, name, namespace), true);
 });
 
@@ -6006,12 +6010,12 @@ test("gateway routing derives stable endpoints and exact Envoy HTTPRoutes", asyn
   const plainEnvironment = Object.fromEntries(
     plainPod.containers[0].env.map((entry) => [entry.name, entry]),
   );
-  assert.equal(plainEnvironment.OPENCLAW_CONFIG_PATH.value, "/etc/openclaw/openclaw.json");
+  assert.equal(plainEnvironment.OPENCLAW_CONFIG_PATH.value, "/home/node/.openclaw/openclaw.json");
   assert.deepEqual(
     plainPod.containers[0].volumeMounts.find(({ name }) => name === "openclaw-configuration"),
-    { name: "openclaw-configuration", mountPath: "/etc/openclaw", readOnly: true },
+    { name: "openclaw-configuration", mountPath: "/etc/openclaw-managed", readOnly: true },
   );
-  assert.equal(plainPod.initContainers[0].args[0].includes("copyFileSync"), false);
+  assert.equal(plainPod.initContainers[0].args[0].includes("copyFileSync"), true);
 
   const runtimeDriver = createKubernetesComputeDriver(
     routedOptions({
@@ -9301,6 +9305,7 @@ test("dedicated OpenClaw renders an enrolled Harness without exposing model cred
     configurationId: "cfg-native-worker",
     configurationKind: "agent",
     configurationGeneration: 1,
+    gatewayManagedMode: true,
     configuration,
     harness: { id: "openclaw", version: "1.0.0", mode: "dedicated" },
     harnessAuth: apiKeyAuth,
@@ -11175,7 +11180,8 @@ test("Kubernetes status readback skips provider-fenced Harness Pods", async () =
   assert.notEqual(ordinaryObservation.agentStatus, undefined);
 });
 
-async function exerciseEmbeddedReplacement({ providerId, model, environmentName, api, baseUrl }) {
+async function exerciseEmbeddedReplacement(scenario) {
+  const { providerId, model, environmentName, api, baseUrl, predecessorManagedMode } = scenario;
   const modelRef = `${providerId}/${model}`;
   const driver = createKubernetesComputeDriver(
     routedOptions({
@@ -11199,6 +11205,7 @@ async function exerciseEmbeddedReplacement({ providerId, model, environmentName,
     configurationId: "cfg_00000000-0000-4000-8000-000000000077",
     configurationKind: "agent",
     configurationGeneration: 1,
+    gatewayManagedMode: true,
     harness: { id: "openclaw", version: "1.0.0", mode: "embedded" },
     harnessAuth: apiKeyAuth,
     compute: { id: driver.id, implementation: driver.implementation },
@@ -11210,6 +11217,7 @@ async function exerciseEmbeddedReplacement({ providerId, model, environmentName,
     ...base,
     id: "revision-embedded-recovery-bad",
     revision: 7,
+    gatewayManagedMode: predecessorManagedMode,
     configuration: {
       agents: { defaults: { model: modelRef } },
       logging: {
@@ -11544,6 +11552,7 @@ async function exerciseEmbeddedReplacement({ providerId, model, environmentName,
   });
 
   const expected = { namespaceId: tenant.id, agentId, revisionId: replacement.id };
+  assert.equal(driver.requiresStoppedPredecessors(replacement), false);
   assert.deepEqual(await driver.prepareRevision(replacement, authContext(replacement)), {
     ...expected,
     ready: true,
@@ -11595,6 +11604,22 @@ async function exerciseEmbeddedReplacement({ providerId, model, environmentName,
   const replaced = objects.get(key("Deployment", gatewayName));
   assert.equal(replaced.metadata.annotations["openclaw.dev/agent-revision-id"], replacement.id);
   assert.equal(replaced.spec.strategy.type, "Recreate");
+  for (const [deployment, managed] of [
+    [predecessor, predecessorManagedMode],
+    [replaced, true],
+  ]) {
+    const container = deployment.spec.template.spec.containers[0];
+    assert.equal(
+      containerProgram(container).includes('"OPENCLAW_DISABLE_GATEWAY_LOCAL_TERMINALS":"1"'),
+      managed,
+    );
+    if (!managed) {
+      assert.equal(
+        container.env.find(({ name }) => name === "OPENCLAW_CONFIG_PATH").value,
+        "/home/node/.openclaw/openclaw.json",
+      );
+    }
+  }
   assert.deepEqual(
     [...objects.values()]
       .filter(({ kind }) => kind === "Deployment")
@@ -11692,6 +11717,7 @@ test("embedded replacement cuts over an unready shared gateway and waits for act
       environmentName: "OPENAI_API_KEY",
       api: "openai-responses",
       baseUrl: "https://api.openai.com/v1",
+      predecessorManagedMode: false,
     },
     {
       providerId: "anthropic",
@@ -11699,6 +11725,7 @@ test("embedded replacement cuts over an unready shared gateway and waits for act
       environmentName: "ANTHROPIC_API_KEY",
       api: "anthropic-messages",
       baseUrl: "https://api.anthropic.com",
+      predecessorManagedMode: true,
     },
   ]) {
     await t.test(scenario.providerId, () => exerciseEmbeddedReplacement(scenario));
@@ -14132,7 +14159,7 @@ test("an owner cancellation ends a Kubernetes retry wait at once", async () => {
   assert.ok(Date.now() - started < 1_500);
 });
 
-test("revision lifecycle rejects another driver or missing identity before cluster access", async () => {
+test("revision lifecycle rejects invalid ownership and unsupported workloads before cluster access", async () => {
   const driver = createKubernetesComputeDriver(options());
   const revision = {
     id: "revision-a-1",
@@ -14143,6 +14170,7 @@ test("revision lifecycle rejects another driver or missing identity before clust
     configurationId: "cfg_00000000-0000-4000-8000-000000000001",
     configurationKind: "agent",
     configurationGeneration: 1,
+    gatewayManagedMode: false,
     configuration: {
       agents: { defaults: { model: "codex/gpt-5" } },
       gateway: { controlUi: { enabled: false } },
@@ -14159,6 +14187,16 @@ test("revision lifecycle rejects another driver or missing identity before clust
     servicePrincipalId: "service-principal-agent-a",
     createdAt: tenant.createdAt,
   };
+
+  const managed = { ...revision, gatewayManagedMode: true };
+  const unsupportedManaged = {
+    name: "ConfigurationHarnessError",
+    message:
+      "Agent setting gatewayManagedMode requires a supported Gateway runtime on Kubernetes Compute.",
+  };
+  assert.throws(() => driver.admitRevision(managed), unsupportedManaged);
+  await assert.rejects(driver.prepareRevision(managed), unsupportedManaged);
+  await assert.rejects(driver.activateRevision(managed), unsupportedManaged);
 
   for (const provider of ["slack", "msteams"]) {
     for (const configuration of [{ enabled: true }, { accounts: { support: { enabled: true } } }]) {
@@ -14964,6 +15002,7 @@ test("Gateway and Harness storage are separate and preserve ephemeral Codex cred
           name: "configuration-2",
           revision: 2,
           revisionId: "revision-2",
+          gatewayManagedMode: false,
           annotations: {},
           loggingLevel: "info",
         },
@@ -18486,9 +18525,11 @@ test("rendered exec arguments and environment values stay within the per-string 
       // Runtime programs travel as bounded pieces and arrive intact.
       const program = containerProgram(spec.template.spec.containers[0]);
       assert.ok(
-        [GATEWAY_RUNTIME_ENTRYPOINT, AGENT_RUNTIME_ENTRYPOINT, AGENT_WITH_NODE_ENTRYPOINT].some(
-          (entrypoint) => program.endsWith(withoutLineComments(entrypoint)),
-        ),
+        [
+          gatewayRuntimeEntrypoint(revision.gatewayManagedMode),
+          AGENT_RUNTIME_ENTRYPOINT,
+          AGENT_WITH_NODE_ENTRYPOINT,
+        ].some((entrypoint) => program.endsWith(withoutLineComments(entrypoint))),
       );
     }
   }
