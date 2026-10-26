@@ -192,8 +192,10 @@ describe("Agent channels", { concurrency: 3 }, () => {
       await statusTone(dialog.getByText(/^New version\. Changes affect future deployments/)),
       { className: "status", tone: "info", role: "status" },
     );
-    const appSecretPath = `/namespaces/${namespace.id}/secrets/${slackAppSecret.id}`;
-    const botSecretPath = `/namespaces/${namespace.id}/secrets/${slackBotSecret.id}`;
+    // Each link opens the console's Secrets page with that Secret, not the API's JSON (finding
+    // D757).
+    const appSecretPath = `/console/secrets?namespace=${namespace.id}&secret=${slackAppSecret.id}`;
+    const botSecretPath = `/console/secrets?namespace=${namespace.id}&secret=${slackBotSecret.id}`;
     const appSecretLink = dialog.getByRole("link", {
       name: "View app token Secret metadata (opens in new tab)",
     });
@@ -241,8 +243,11 @@ describe("Agent channels", { concurrency: 3 }, () => {
     await appSecretLink.click();
     const appSecretPopup = await appSecretPopupPromise;
     await appSecretPopup.waitForLoadState("domcontentloaded");
-    assert.equal(new URL(appSecretPopup.url()).pathname, appSecretPath);
-    await appSecretPopup.getByText("Slack app token").waitFor();
+    const popupUrl = new URL(appSecretPopup.url());
+    assert.equal(`${popupUrl.pathname}${popupUrl.search}`, appSecretPath);
+    // The Secrets page opens the linked Secret's metadata.
+    const appSecretDialog = appSecretPopup.getByRole("dialog", { name: "Slack app token" });
+    await appSecretDialog.getByText(slackAppSecret.id, { exact: true }).waitFor();
     const secretMetadataText = await appSecretPopup.locator("body").textContent();
     assert.match(secretMetadataText, new RegExp(slackAppSecret.id));
     assert.doesNotMatch(secretMetadataText, new RegExp(slackAppSecretValue));

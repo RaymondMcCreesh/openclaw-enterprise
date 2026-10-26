@@ -1268,8 +1268,7 @@ test("an operator without administer sees status but no log text and is never re
   await page.locator(".runtime-pod").getByRole("heading", { name: "Gateway" }).waitFor();
   await page.getByText(LOG_TEXT_DENIED).waitFor();
   assert.equal(await page.getByText("operator must not see this").count(), 0);
-  // Every log control is disabled and described by the refusal beside it, Request ID included
-  // (finding D749).
+  // Every log control is disabled and described by the refusal beside it (finding D749).
   const refusal = await page.locator(".log-error").textContent();
   assert.ok(refusal?.startsWith(LOG_TEXT_DENIED));
   for (const control of [
@@ -1283,8 +1282,10 @@ test("an operator without administer sees status but no log text and is never re
     assert.equal(await control.isDisabled(), true);
     assert.equal(await accessibleDescription(control), refusal);
   }
+  // The permission answer says log text is denied, so the read the API would refuse and audit
+  // is never sent (finding D758).
   const denied = logRequests(requests, revisionId).length;
-  assert.equal(denied, 1);
+  assert.equal(denied, 0);
   // Log text was never allowed, so the refusal revokes nothing: status is not asked again at
   // once (finding 1597's re-ask is for a revocation).
   await settlePageRequests(page);
@@ -1956,8 +1957,9 @@ test("the Gateway hint skips a rollout's old Harness Pod and covers a Harness wi
   assert.match((await missing.textContent()) ?? "", /see Deployment activity/);
 });
 
-// The permission answer already says the reader lacks operate, so the status read, an audited
-// denial, is never sent (finding 2454); the strip still says what log text needs.
+// The permission answer already says the reader lacks operate and log text, so neither the status
+// read nor the log text read, each an audited denial, is sent (findings 2454, D758); the strip and
+// the log pane still say what each needs.
 test("a reader without operate learns what log text needs and is not asked for status", async (t) => {
   const { fixture, namespace, agent, revisionId } = await logsFixture(t);
   const { account: reader } = await logsMember(fixture, namespace, "runtime-reader", ["read"]);
@@ -1967,11 +1969,13 @@ test("a reader without operate learns what log text needs and is not asked for s
   await login(page, fixture, url, reader.credentials);
 
   await page.getByText(RUNTIME_STATUS_DENIED).waitFor();
+  await page.locator(".log-error").getByText(LOG_TEXT_DENIED, { exact: true }).waitFor();
   const statusReads = () =>
     requests.filter(({ path }) => path.endsWith(`/deployments/${revisionId}/runtime`)).length;
   await settlePageRequests(page);
   assert.equal(statusReads(), 0);
-  // The status strip shows no refusal's Request ID (the log text read is still refused).
+  assert.equal(logRequests(requests, revisionId).length, 0);
+  // Neither refusal shows a Request ID: nothing was sent.
   assert.doesNotMatch(
     (await page.getByText(/^Runtime status requires Agent operate/).textContent()) ?? "",
     /Request ID/,
@@ -1984,6 +1988,7 @@ test("a reader without operate learns what log text needs and is not asked for s
   await page.getByText(/Log text needs Agent read_logs/).waitFor();
   await settlePageRequests(page);
   assert.equal(statusReads(), 0);
+  assert.equal(logRequests(requests, revisionId).length, 0);
 });
 
 test("a status denial for one operator does not carry over to the next sign-in on the tab", async (t) => {
@@ -2918,9 +2923,9 @@ test("a restored operate grant shows status on Back, and a new sign-in asks for 
   const logReads = () => logRequests(requests, logs.revisionId).length;
   const permissionReads = () =>
     requests.filter(({ path }) => path.endsWith(`/agents/${logs.agent.id}/permissions`)).length;
-  // The answer says no operate, so status is not asked (finding 2454).
+  // The answer says no operate and no log text, so neither is asked (findings 2454, D758).
   assert.equal(statusReads(), 0);
-  assert.equal(logReads(), 1);
+  assert.equal(logReads(), 0);
 
   // Each Back that rebuilds the page reads the answer twice: Back's check and the page's own
   // read, which the rebuilt Logs view reuses while it is in flight.
@@ -2932,8 +2937,8 @@ test("a restored operate grant shows status on Back, and a new sign-in asks for 
   await waitForIdleFetches(page);
   assert.equal(statusReads(), 1);
   assert.equal(permissionReads() - permissionsBefore, 2);
-  // The permission answer has no read_logs bit, so the log text denial stands for this sign-in.
-  assert.equal(logReads(), 1);
+  // The log text denial stands for this sign-in, still without a read.
+  assert.equal(logReads(), 0);
   await page.getByText(/Log text requires Agent read_logs/).waitFor();
 
   // Operate revoked: Back's check of the shown status is refused once; the rebuilt view takes

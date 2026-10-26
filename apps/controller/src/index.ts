@@ -1592,11 +1592,7 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
   }
 
   // Report the primary IAM decision without auditing a mutation the caller never attempted.
-  async function callerMay(
-    actorId: string,
-    action: PermissionAction,
-    resource: ResourceRef,
-  ): Promise<boolean> {
+  async function callerDecision(actorId: string, action: PermissionAction, resource: ResourceRef) {
     const selected = selectedIAMDriver();
     let decision;
     try {
@@ -1613,7 +1609,15 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
     ) {
       throw dependencyUnavailable();
     }
-    return decision.allowed;
+    return { allowed: decision.allowed, restricted: decision.evidence.restrictionIds.length > 0 };
+  }
+
+  async function callerMay(
+    actorId: string,
+    action: PermissionAction,
+    resource: ResourceRef,
+  ): Promise<boolean> {
+    return (await callerDecision(actorId, action, resource)).allowed;
   }
 
   async function denial(
@@ -2476,24 +2480,34 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
         namespaceId,
       };
       const [
-        update,
-        deploy,
-        operate,
-        remove,
-        // Native admin UI access authorizes Agent administer on the exact Agent, so the console
-        // skips its audited probe for a caller without it.
-        administer,
-        configurationUpdate,
-        configurationRead,
-        sandboxPolicyRead,
+        [
+          update,
+          deploy,
+          operate,
+          remove,
+          // Native admin UI access authorizes Agent administer on the exact Agent, so the console
+          // skips its audited probe for a caller without it.
+          administer,
+          configurationUpdate,
+          configurationRead,
+          sandboxPolicyRead,
+        ],
+        readLogsDecision,
       ] = await Promise.all([
-        ...(["update", "deploy", "operate", "delete", "administer"] as const).map((action) =>
-          callerMay(context.actorId, action, target),
-        ),
-        callerMay(context.actorId, "update", configuration),
-        callerMay(context.actorId, "read", configuration),
-        callerMay(context.actorId, "read", sandboxPolicy),
+        Promise.all([
+          ...(["update", "deploy", "operate", "delete", "administer"] as const).map((action) =>
+            callerMay(context.actorId, action, target),
+          ),
+          callerMay(context.actorId, "update", configuration),
+          callerMay(context.actorId, "read", configuration),
+          callerMay(context.actorId, "read", sandboxPolicy),
+        ]),
+        callerDecision(context.actorId, "read_logs", target),
       ]);
+      // Log text authorizes Agent read_logs or, without a Restriction on read_logs, Agent
+      // administer in its place, as the runtime log read decides it. The console skips that
+      // audited read for a caller without either (finding D758).
+      const readLogs = readLogsDecision.allowed || (!readLogsDecision.restricted && administer);
       // One IAM call per distinct grant, shared by the answers below. A Secret bound to several
       // names is one decision.
       const decisions = new Map<string, Promise<boolean>>();
@@ -2568,6 +2582,7 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
           configurationSecretsOperateDeniedBindings,
           agentSourcesOperate,
           sandboxPolicyRead,
+          readLogs,
         },
         meta: { requestId: request.id },
       });
@@ -2598,34 +2613,51 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
       // so it reports nothing that request would not, and only on the Secrets the caller may
       // list.
       const mayBind = configurationUpdate || update;
-      const listed =
-        namespaceRead && configurationRead && (mayBind || deploy)
-          ? await controller.listSecretsOperateDenied(context.actorId, namespaceId)
-          : [];
+      const reported = namespaceRead && configurationRead && (mayBind || deploy);
+      const listed = reported
+        ? await controller.listSecretsOperateDenied(context.actorId, namespaceId)
+        : [];
       // A deployment checks only the Secrets the draft binds now: its Configuration's Secret
-      // bindings and a Secret Harness authentication source. A caller who may deploy but bind
-      // nothing learns only those, which the Agent and Configuration reads already name
-      // (finding 2565).
-      let operateDenied = listed;
-      if (!mayBind && listed.length > 0) {
-        const bound = new Set(
-          Object.values(
-            await controller.getConfigurationSecretBindingSources(
-              context.actorId,
-              namespaceId,
-              agent.configurationId,
-            ),
-          )
-            .filter((source) => source.kind === "secret")
-            .map((source) => source.id),
-        );
+      // bindings and a Secret Harness authentication source.
+      const bound = new Set<string>();
+      if (reported) {
+        for (const source of Object.values(
+          await controller.getConfigurationSecretBindingSources(
+            context.actorId,
+            namespaceId,
+            agent.configurationId,
+          ),
+        )) {
+          if (source.kind === "secret" && source.namespaceId === namespaceId) {
+            bound.add(source.id);
+          }
+        }
         // Unreadable saved settings hide the Agent's sources, so the answer leaves them out.
-        if (!("configurationReadError" in agent) && isSecretHarnessAuth(agent.harnessAuth)) {
+        if (
+          !("configurationReadError" in agent) &&
+          isSecretHarnessAuth(agent.harnessAuth) &&
+          agent.harnessAuth.source.namespaceId === namespaceId
+        ) {
           bound.add(agent.harnessAuth.source.id);
         }
-        operateDenied = listed.filter((id) => bound.has(id));
       }
-      reply.send({ data: { operateDenied }, meta: { requestId: request.id } });
+      // A caller who may deploy but bind nothing learns only those, which the Agent and
+      // Configuration reads already name (finding 2565).
+      const operateDenied = mayBind ? listed : listed.filter((id) => bound.has(id));
+      // The bound Secrets the caller may neither read nor operate: a count, never their IDs, so a
+      // console can hold Deploy without naming them (finding D756).
+      const unreadableOperateDenied =
+        bound.size > 0
+          ? await controller.countUnreadableSecretsOperateDenied(
+              context.actorId,
+              namespaceId,
+              bound,
+            )
+          : 0;
+      reply.send({
+        data: { operateDenied, unreadableOperateDenied },
+        meta: { requestId: request.id },
+      });
       return;
     }
 
