@@ -77,6 +77,8 @@ export const DeploymentModelProbeFailedConfigurationEditor = story(
 );
 export const DeploymentFailedDeployAgain = story("deploymentFailedDeployAgain");
 export const DeploymentFailedDeployAgainUnreadable = story("deploymentFailedDeployAgainUnreadable");
+export const DeploymentFailedAdmissionUnavailable = story("deploymentFailedAdmissionUnavailable");
+export const DeploymentFailedStoredInconsistent = story("deploymentFailedStoredInconsistent");
 export const DeploymentModelProbeFailedDeployOnlyUnreadable = story(
   "deploymentModelProbeFailedDeployOnlyUnreadable",
 );
@@ -191,6 +193,7 @@ export const PolicyDenialsUnsupported = story("policyDenialsUnsupported");
 export const PolicyDenialsGap = story("policyDenialsGap");
 export const PolicyDenialsMissingMetadata = story("policyDenialsMissingMetadata");
 export const PolicyDenialsFailed = story("policyDenialsFailed");
+export const PolicyApplicationCeilingChanged = story("policyApplicationCeilingChanged");
 export const PolicyDenialsApplyRejected = story("policyDenialsApplyRejected");
 export const PolicyIncompletePreview = story("policyIncompletePreview");
 export const PolicyUnconfirmedSave = story("policyUnconfirmedSave");
