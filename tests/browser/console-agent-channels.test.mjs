@@ -28,7 +28,7 @@ import {
   waitForInputValue,
   writeRequests,
 } from "./console-agents-browser-helpers.mjs";
-import { SECRET_CREATE_DENIED } from "../helpers/refusal-text.mjs";
+import { SECRET_CREATE_DENIED, SLACK_SETUP_HINT } from "../helpers/refusal-text.mjs";
 
 // The Agent's grant of a saved Slack Secret was refused, or the IAM policy shows none (finding 1920).
 const GRANT_REFUSED =
@@ -105,9 +105,6 @@ async function failMethod(page, pattern, method, answer) {
     await route.fulfill(answer);
   });
 }
-
-const SLACK_SETUP_HINT =
-  "Provide SLACK_APP_TOKEN and SLACK_BOT_TOKEN through Secret bindings before deployment.";
 
 // Every case builds its own Console and browser context, so cases run a few at a time.
 describe("Agent channels", { concurrency: 3 }, () => {
@@ -575,13 +572,15 @@ describe("Agent channels", { concurrency: 3 }, () => {
   });
 
   // A version snapshot cannot be edited, so its Slack card offers no setup step: a reader of a
-  // v1 without Slack was told to provide the tokens (finding 2455). The draft still asks.
+  // v1 without Slack was told to provide the tokens (finding 2455). The Dedicated draft still
+  // asks; an Embedded one cannot have channels, so it does not (finding D708).
   test("A version snapshot's Slack card shows no setup hint", async (t) => {
     const { fixture, namespace } = await readyNamespace(t, "Snapshot Slack hint");
     const agent = await fixture.createAgent(
       namespace.id,
       "Snapshot Agent",
-      nativeValues("snapshot"),
+      nativeValues("snapshot", { harnessId: "codex" }),
+      { executionMode: "dedicated" },
     );
     const { revision } = await fixture.seedActiveAgentRevision(namespace.id, agent.id);
     const { page } = await newPage(t, fixture, { browser });
