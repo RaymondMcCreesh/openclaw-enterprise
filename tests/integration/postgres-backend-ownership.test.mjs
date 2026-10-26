@@ -23,7 +23,12 @@ import {
 } from "../helpers/postgres-backend-state.mjs";
 import { reservePort } from "../helpers/available-port.mjs";
 import { stopProcess } from "../helpers/stop-process.mjs";
+import { PostgresWorkQueue } from "../../packages/occ/src/state/postgres-work-queue.ts";
 import { waitFor } from "../helpers/wait-for.mjs";
+import {
+  SERVICE_ACCOUNT_BACKEND_MISMATCH,
+  SERVICE_ACCOUNT_NO_BACKEND_BINDING,
+} from "../helpers/refusal-text.mjs";
 
 async function request(origin, session, method, path, body) {
   const response = await fetch(`${origin}${path}`, {
@@ -84,11 +89,40 @@ async function assertNoAgentNamed(pool, namespaceId, name, label) {
   assert.equal(result.rows[0].count, 0, label);
 }
 
-async function expectBackendConflict(operation, pattern, name = "ResourceConflictError") {
-  await assert.rejects(
-    operation,
-    (error) => error?.name === name && (pattern === undefined || pattern.test(error.message)),
-  );
+// Claims exactly `workId`: other work in this database stays locked, so the real queue's
+// SKIP LOCKED claim selects only it.
+async function claimOnly(pool, workId) {
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    await client.query(
+      "SELECT idempotency_key FROM occ.controller_work WHERE idempotency_key <> $1 FOR UPDATE SKIP LOCKED",
+      [workId],
+    );
+    // Claim on another connection: PostgreSQL does not skip a transaction's own locks.
+    const claim = await new PostgresWorkQueue(pool).claim();
+    await client.query("COMMIT");
+    assert.equal(claim?.idempotencyKey, workId);
+    return claim;
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+// `expected` is the exact message, or a pattern for messages this file does not own.
+async function expectBackendConflict(operation, expected, name = "ResourceConflictError") {
+  await assert.rejects(operation, (error) => {
+    assert.equal(error?.name, name, error?.message);
+    if (typeof expected === "string") {
+      assert.equal(error.message, expected);
+    } else if (expected !== undefined) {
+      assert.match(error.message, expected);
+    }
+    return true;
+  });
 }
 
 test(
@@ -505,31 +539,31 @@ test(
         label: "backendless",
         agentBackendId: null,
         binding: {},
-        message: /no Backend binding/,
+        message: SERVICE_ACCOUNT_NO_BACKEND_BINDING,
       },
       {
         label: "backend-mismatch",
         agentBackendId: backendId,
         binding: { backendId: "other-backend" },
-        message: /does not match its Backend/,
+        message: SERVICE_ACCOUNT_BACKEND_MISMATCH,
       },
       {
         label: "driver-mismatch",
         agentBackendId: backendId,
         binding: { driverId: "other-service-account-driver" },
-        message: /does not match its Backend/,
+        message: SERVICE_ACCOUNT_BACKEND_MISMATCH,
       },
       {
         label: "workspace-mismatch",
         agentBackendId: backendId,
         binding: { workspaceId: alternateWorkspaceId },
-        message: /does not match its Backend/,
+        message: SERVICE_ACCOUNT_BACKEND_MISMATCH,
       },
       {
         label: "credential-not-issued",
         agentBackendId: backendId,
         binding: { credentialIssued: false },
-        message: /does not match its Backend/,
+        message: SERVICE_ACCOUNT_BACKEND_MISMATCH,
       },
     ]) {
       const namespace = await createReadyNamespace(fixture, scenario.label);
@@ -563,6 +597,7 @@ test(
             resolveApprovedHarness,
           ),
         scenario.message,
+        "ServiceAccountBackendBindingError",
       );
       await assertNoRevision(
         fixture.pool,
@@ -624,28 +659,35 @@ test(
   { ...requiresPostgres, timeout: 60_000 },
   async (context) => {
     const fixture = await createBackendFixture(context);
-    const controller = createBackendController(fixture, { nativeWorkerSupport: "custom-image" });
     // These stubs only pass the provisioning capability gates; Harness authentication admission
-    // (the code under test) stays real. No worker runs, so no runtime or Configuration effect may.
-    Object.assign(controller.selectedDriver("compute"), {
-      agentProvisioning: { executionModes: ["dedicated"] },
-      requiresAgentRuntimeCredentials: true,
-      validateAgentProvisioning() {},
-      async provisionAgentRuntimeCredentials() {
-        assert.fail("Provisioning admission must not provision runtime credentials.");
-      },
-      async getAgentRuntimeCredentialStatus() {
-        return { transportConfigured: false };
-      },
-    });
-    Object.assign(controller.selectedDriver("configuration"), {
-      async createExact() {
-        assert.fail("Provisioning admission must not create a Configuration.");
-      },
-      async inspectExact() {
-        assert.fail("Provisioning admission must not inspect a Configuration.");
-      },
-    });
+    // (the code under test) stays real. No runtime or Configuration effect may run.
+    const stubbedController = (options = {}) => {
+      const controller = createBackendController(fixture, {
+        nativeWorkerSupport: "custom-image",
+        ...options,
+      });
+      Object.assign(controller.selectedDriver("compute"), {
+        agentProvisioning: { executionModes: ["dedicated"] },
+        requiresAgentRuntimeCredentials: true,
+        validateAgentProvisioning() {},
+        async provisionAgentRuntimeCredentials() {
+          assert.fail("Provisioning admission must not provision runtime credentials.");
+        },
+        async getAgentRuntimeCredentialStatus() {
+          return { transportConfigured: false };
+        },
+      });
+      Object.assign(controller.selectedDriver("configuration"), {
+        async createExact() {
+          assert.fail("Provisioning admission must not create a Configuration.");
+        },
+        async inspectExact() {
+          assert.fail("Provisioning admission must not inspect a Configuration.");
+        },
+      });
+      return controller;
+    };
+    const controller = stubbedController();
     const provision = (namespace, account, label) =>
       controller.provisionAgent(fixture.actor.id, {
         namespaceId: namespace.id,
@@ -678,6 +720,24 @@ test(
     const accepted = await provision(exactNamespace, account, "provisioning-exact");
     assert.equal(accepted.provisioning.status, "queued", JSON.stringify(accepted));
     assert.equal(await pendingWork(exactNamespace), 1);
+    // The job checks the binding again: after the Installation's ChatGPT Backend moves to another
+    // workspace, it fails with the same named text in its status, not the generic one.
+    const moved = stubbedController({
+      backends: [backendDefinition({ workspaceId: alternateWorkspaceId })],
+    });
+    const { workId } = accepted.provisioning;
+    const outcome = await moved.processAgentProvisioning(
+      await claimOnly(fixture.pool, workId),
+      resolveApprovedHarness,
+    );
+    assert.equal(outcome.outcome, "permanent", JSON.stringify(outcome));
+    const job = await fixture.pool.query(
+      "SELECT progress->'error' AS error FROM occ.agent_provisioning_work WHERE work_id = $1",
+      [workId],
+    );
+    assert.deepEqual(job.rows, [
+      { error: { code: "PROVISIONING_REJECTED", message: SERVICE_ACCOUNT_BACKEND_MISMATCH } },
+    ]);
     await fixture.cleanup(exactNamespace);
 
     for (const scenario of [
@@ -691,12 +751,12 @@ test(
       {
         label: "workspace-mismatch",
         binding: { workspaceId: alternateWorkspaceId },
-        message: /does not match its Backend/,
+        message: SERVICE_ACCOUNT_BACKEND_MISMATCH,
       },
       {
         label: "credential-not-issued",
         binding: { credentialIssued: false },
-        message: /does not match its Backend/,
+        message: SERVICE_ACCOUNT_BACKEND_MISMATCH,
       },
     ]) {
       const namespace = await createReadyNamespace(fixture, scenario.label);
@@ -718,7 +778,7 @@ test(
       await expectBackendConflict(
         () => provision(namespace, brokenAccount, scenario.label),
         scenario.message,
-        scenario.expectedErrorName,
+        scenario.expectedErrorName ?? "ServiceAccountBackendBindingError",
       );
       assert.equal(
         await pendingWork(namespace),
