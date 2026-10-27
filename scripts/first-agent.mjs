@@ -11,6 +11,7 @@ import { isDeepStrictEqual } from "node:util";
 import { findFirstAgentSecret, grantFirstAgentSecret } from "./first-agent-database.mjs";
 import { defaultAgentModel } from "../apps/controller/src/console/agents/starter-model.mjs";
 import { deriveNativeAdminHost } from "../apps/controller/src/gateway/native-admin-host.mjs";
+import { isName, NAME_RULE } from "../packages/contracts/src/api/plain-text.ts";
 import {
   firstAgentPriorPatPolicy,
   firstAgentPriorPatPolicyWarning,
@@ -70,15 +71,10 @@ function parseArguments(argv) {
       throw new Error(`Unexpected argument. ${usage().split("\n")[0]}`);
     }
   }
-  if (
-    !result.name ||
-    result.name.length > 200 ||
-    result.name.trim() !== result.name ||
-    /\p{Cc}/u.test(result.name)
-  ) {
-    throw new Error(
-      "Provide an Agent name of 1–200 characters without surrounding whitespace or control characters.",
-    );
+  // The create-Agent body uses the Name schema. Count code points and refuse line
+  // and paragraph separators, matching isName, before Local Setup is consulted.
+  if (!isName(result.name)) {
+    throw new Error(`Provide an Agent name of ${NAME_RULE}.`);
   }
   if (result.prompt !== undefined && (!result.prompt.trim() || result.prompt.length > 4_000)) {
     throw new Error("The prompt must contain 1–4,000 characters.");

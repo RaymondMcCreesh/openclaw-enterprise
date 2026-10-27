@@ -98,11 +98,14 @@ test("first-Agent starts without installed workspace dependencies", async (t) =>
 
   // Run real sources outside the checkout so installed workspace packages cannot
   // hide import failures in the host-run command used by First Agent Smoke.
+  // plain-text.ts has no imports; first-agent loads the Name rule from it.
+  await mkdir(join(directory, "packages/contracts/src/api"), { recursive: true });
   for (const path of [
     "package.json",
     "scripts/first-agent.mjs",
     "scripts/first-agent-database.mjs",
     "scripts/first-agent-model.mjs",
+    "packages/contracts/src/api/plain-text.ts",
     "apps/controller/src",
   ]) {
     await cp(join(repository, path), join(directory, path), { recursive: true });
@@ -123,6 +126,29 @@ test("first-Agent starts without installed workspace dependencies", async (t) =>
   assert.equal(result.status, 0, result.error?.message ?? result.stderr);
   assert.match(result.stdout, /Usage: node scripts\/first-agent\.mjs/);
   assert.match(result.stdout, /--control-ui/);
+});
+
+test("first-Agent applies the Name rule before local setup", () => {
+  const env = { ...process.env };
+  delete env.NODE_TEST_CONTEXT;
+  // A missing directory keeps a name that passes the rule from touching a real cluster.
+  env.OCC_DEVELOPMENT_STATE_DIRECTORY = "/tmp/oce-first-agent-name-rule-absent";
+  const run = (name) =>
+    spawnSync(process.execPath, [firstAgent, name], {
+      cwd: repository,
+      encoding: "utf8",
+      env,
+      timeout: 10_000,
+    });
+  const accepted = run("🙂".repeat(200));
+  assert.equal(accepted.status, 1);
+  assert.match(accepted.stderr, /Local Kubernetes state or its recorded key was not found/);
+  for (const name of ["🙂".repeat(201), "hello\u2028world", " padded"]) {
+    const refused = run(name);
+    assert.equal(refused.status, 1, name);
+    assert.match(refused.stderr, /line or paragraph separators/, name);
+    assert.doesNotMatch(refused.stderr, /Local Kubernetes state/, name);
+  }
 });
 
 test("first-Agent accepts current Compose-backed Kubernetes development state", async (t) => {
