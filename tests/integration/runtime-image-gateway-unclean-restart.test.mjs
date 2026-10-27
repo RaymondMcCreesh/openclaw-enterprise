@@ -3,6 +3,8 @@
 // same scenario helper as the startup probe files.
 import assert from "node:assert/strict";
 import test from "node:test";
+import { INITIALIZE_EMBEDDED_GATEWAY_OWNER } from "../../apps/controller/src/drivers/compute/embedded-gateway-owner.ts";
+import { DockerComputeDriver } from "../../apps/controller/src/drivers/compute/docker/index.ts";
 import { imageSmokeTimeoutMultiplier } from "../helpers/image-smoke-timeout.mjs";
 import {
   image,
@@ -80,13 +82,7 @@ async function sendFirstTurn(containerName) {
   return JSON.parse(stdout);
 }
 
-async function stopAndRecoverGateway(containerName) {
-  const { stdout: id } = await runDocker(["inspect", "--format", "{{.Id}}", containerName]);
-  const gatewayId = id.trim();
-  await runDocker(["kill", "--signal", "KILL", gatewayId]);
-  const stopped = await runDocker(["wait", gatewayId]);
-  assert.equal(stopped.stdout.trim(), "137", "Docker must confirm the killed Gateway exited");
-
+async function recoverStoppedGateway(gatewayId) {
   // The test owns this private volume. Act as its operator only after Docker
   // confirms the exact former owner stopped. Reuse its read-only fixture config
   // and writable state so OC inspects the same locks the replacement will see.
@@ -132,35 +128,116 @@ async function stopAndRecoverGateway(containerName) {
 // the agent database its previous process left without a release, and the
 // first chat turn after Start got HTTP 500. A Gateway killed without its
 // SIGTERM drain (OOM kill, node loss) leaves the same lease. Its restart on the
-// same state after operator recovery must stay unready until the agent takes turns.
-test(
-  "runtime image embedded Gateway serves its first turn after operator-confirmed recovery from an unclean stop",
-  { ...imageTestOptions, timeout: 900_000 },
-  async (t) => {
-    const homeVolume = await gatewayStateVolume(t, "/home/node");
+// same state must stay unready until the agent takes turns.
+for (const [recovery, title] of [
+  [
+    "Docker",
+    "runtime image embedded Gateway restarted after an unclean stop is ready only when its agent takes turns",
+  ],
+  [
+    "Kubernetes",
+    "an embedded Gateway container restarted in the same Kubernetes Pod recovers its first owner",
+  ],
+  [
+    "operator",
+    "runtime image embedded Gateway serves its first turn after operator-confirmed recovery from an unclean stop",
+  ],
+]) {
+  test(title, { ...imageTestOptions, timeout: 900_000 }, async (t) => {
+    const mountPath = recovery === "Docker" ? "/home/node/.openclaw" : "/home/node";
+    const volume = await gatewayStateVolume(t, mountPath);
+    const stateMount = recovery === "Docker" ? { stateVolume: volume } : { homeVolume: volume };
+    // The named mounts give two Docker containers the lifetime and mount
+    // permissions of one Pod's two emptyDirs. A real PID namespace dies on kill.
+    const podOwner =
+      recovery === "Kubernetes"
+        ? {
+            verifier: await gatewayStateVolume(t, "/run/oce-gateway-owner-key"),
+            scratch: await gatewayStateVolume(t, "/run/oce-gateway-owner-start"),
+          }
+        : undefined;
+    if (podOwner) {
+      await runDocker([
+        "run",
+        "--rm",
+        "--network",
+        "none",
+        "--read-only",
+        "--cap-drop",
+        "ALL",
+        "--security-opt",
+        "no-new-privileges",
+        "--user",
+        "1000:1000",
+        "-v",
+        podOwner.verifier + ":/run/oce-gateway-owner-key",
+        "-v",
+        podOwner.scratch + ":/run/oce-gateway-owner-start",
+        "--entrypoint",
+        "node",
+        image,
+        "-e",
+        INITIALIZE_EMBEDDED_GATEWAY_OWNER,
+      ]);
+    }
     // The first Gateway answers a turn, so its agent database holds a lease,
     // and is then killed with no chance to release it.
     let firstTurn;
+    let terminatedGatewayNamespace;
+    const compute =
+      recovery === "Docker"
+        ? new DockerComputeDriver({ images: { gateway: image, agent: image } })
+        : undefined;
+    const gatewayManagedMode = recovery === "Kubernetes";
     const first = await runStartupProbeScenario(t, {
       kind: "gateway",
       mode: "answer",
-      homeVolume,
+      ...stateMount,
+      podOwner,
+      gatewayManagedMode,
       until: ({ events }) => events.some(observedValue("ready", true)),
       act: async ({ containerName }) => {
         firstTurn = await sendFirstTurn(containerName);
+        if (compute) {
+          await compute.rememberEmbeddedGateway(
+            containerName,
+            await compute.container(containerName),
+            volume,
+          );
+        }
       },
     });
     await withStartupProbeEvidence(first, async () => {
       assert.equal(firstTurn.status, 200, `first Gateway turn: ${JSON.stringify(firstTurn)}`);
       assert.equal(firstTurn.content, "READY");
     });
-    await stopAndRecoverGateway(first.containerName);
+    const { stdout: id } = await runDocker(["inspect", "--format", "{{.Id}}", first.containerName]);
+    const gatewayId = id.trim();
+    await runDocker(["kill", "--signal", "KILL", gatewayId]);
+    const stopped = await runDocker(["wait", gatewayId]);
+    assert.equal(stopped.stdout.trim(), "137", "Docker must confirm the killed Gateway exited");
+    if (compute) {
+      await compute.removeGateway(
+        first.containerName,
+        await compute.container(first.containerName),
+      );
+      terminatedGatewayNamespace = await compute.takeEmbeddedGatewayHandoff(
+        first.containerName,
+        volume,
+      );
+      assert.ok(terminatedGatewayNamespace, "Engine must confirm the same container stopped");
+    } else if (recovery === "operator") {
+      await recoverStoppedGateway(gatewayId);
+    }
     // The restart's first turn goes out as soon as the runtime reports ready.
     let turn;
     const restarted = await runStartupProbeScenario(t, {
+      terminatedGatewayNamespace,
       kind: "gateway",
       mode: "answer",
-      homeVolume,
+      ...stateMount,
+      podOwner,
+      gatewayManagedMode,
       until: ({ phases }) => phaseAt(phases, "native-spawn") !== undefined,
       act: async ({ containerName }) => {
         // A failed exec is reported with the wrapper output below.
@@ -171,6 +248,9 @@ test(
       // Before the fix: HTTP 500 {"error":{"message":"internal error"}}.
       assert.equal(turn.status, 200, `first turn after restart: ${JSON.stringify(turn)}`);
       assert.equal(turn.content, "READY");
+      if (recovery !== "operator") {
+        assert.match(restarted.snapshot.output, /"recovered"\s*:\s*true/);
+      }
       // The restart did inspect the unreleased database in the background
       // after its listener bound: the window this readiness must cover.
       assert.match(restarted.snapshot.output, /previous release not observed/);
@@ -181,6 +261,23 @@ test(
       // the deferred check instead and no such line.
       assert.match(restarted.snapshot.output, /integrityGateReason=stale-lease-full because=[a-z]/);
       assert.match(restarted.snapshot.output, /recovered after background inspection/);
+      if (gatewayManagedMode) {
+        // The launcher sets these only on its native Gateway child, including after a restart.
+        await runDocker([
+          "exec",
+          restarted.containerName,
+          "sh",
+          "-ec",
+          String.raw`pid=$(pgrep -of '^openclaw-gateway')
+for flag do
+  tr '\0' '\n' < "/proc/$pid/environ" | grep -Fxq "$flag" || { echo "Missing $flag" >&2; exit 1; }
+done`,
+          "sh",
+          "OPENCLAW_CONFIG_READONLY=1",
+          "OPENCLAW_DISABLE_GATEWAY_LOCAL_TERMINALS=1",
+          "OPENCLAW_DISABLE_CRON_HOST_EXECUTION=1",
+        ]);
+      }
     });
-  },
-);
+  });
+}
