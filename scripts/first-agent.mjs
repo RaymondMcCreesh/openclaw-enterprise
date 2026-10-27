@@ -61,9 +61,20 @@ function parseArguments(argv) {
       result.replaceKey = true;
     } else if (value === "--control-ui" && !result.controlUi) {
       result.controlUi = true;
-    } else if (value === "--harness" && argv[index + 1]) {
+    } else if (value === "--harness") {
+      const next = argv[index + 1];
+      if (!next || next.startsWith("--")) {
+        throw new Error("--harness requires openclaw or codex.");
+      }
       result.harness = argv[++index];
-    } else if (value === "--prompt" && result.prompt === undefined && argv[index + 1]) {
+    } else if (value === "--prompt") {
+      if (result.prompt !== undefined) {
+        throw new Error("--prompt may be given once.");
+      }
+      const next = argv[index + 1];
+      if (!next || next.startsWith("--")) {
+        throw new Error("--prompt requires text.");
+      }
       result.prompt = argv[++index];
     } else if (!value.startsWith("-") && result.name === undefined) {
       result.name = value;

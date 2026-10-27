@@ -464,3 +464,31 @@ test("first-Agent refuses an unrecognized saved record without calling it old", 
     /recorded Namespace, model, Harness, Sandbox Driver, or Control UI selection differs/,
   );
 });
+
+test("first-Agent does not take the next flag as the prompt or harness", () => {
+  const env = { ...process.env };
+  delete env.NODE_TEST_CONTEXT;
+  env.OCC_DEVELOPMENT_STATE_DIRECTORY = "/tmp/oce-first-agent-prompt-flag-absent";
+  const run = (args) =>
+    spawnSync(process.execPath, [firstAgent, ...args], {
+      cwd: repository,
+      encoding: "utf8",
+      env,
+      timeout: 10_000,
+    });
+  const promptFlag = run(["MyAgent", "--prompt", "--replace-key"]);
+  assert.equal(promptFlag.status, 1);
+  assert.match(promptFlag.stderr, /--prompt requires text/);
+  assert.doesNotMatch(promptFlag.stderr, /Local Kubernetes state/);
+  const controlFlag = run(["MyAgent", "--prompt", "--control-ui"]);
+  assert.equal(controlFlag.status, 1);
+  assert.match(controlFlag.stderr, /--prompt requires text/);
+  const harnessFlag = run(["MyAgent", "--harness", "--prompt", "hello"]);
+  assert.equal(harnessFlag.status, 1);
+  assert.match(harnessFlag.stderr, /--harness requires openclaw or codex/);
+  assert.doesNotMatch(harnessFlag.stderr, /Local Kubernetes state/);
+  const kept = run(["MyAgent", "--prompt", "hello", "--replace-key"]);
+  assert.equal(kept.status, 1);
+  assert.match(kept.stderr, /Local Kubernetes state or its recorded key was not found/);
+  assert.doesNotMatch(kept.stderr, /--prompt requires text/);
+});
