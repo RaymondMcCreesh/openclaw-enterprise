@@ -107,6 +107,7 @@
     "tests/integration/static-egress.test.mjs",
     "tests/integration/credential-proxy-peer-pin.test.ts",
     "tests/integration/credential-proxy-revision-currentness.test.ts",
+    "tests/integration/credential-proxy-stream-exchange.test.ts",
     "tests/integration/egress-stock-online-authority.test.mjs",
     "tests/integration/egress-stock-online-git-authority.test.mjs",
     "tests/conformance/openshell-prepared-git-provider.test.mjs",
@@ -581,6 +582,15 @@
     },
     {
       "path": "tests/conformance/kubernetes-prepared-repository.test.mjs"
+    },
+    {
+      "path": "tests/integration/credential-proxy-stream-exchange.test.ts",
+      "expectedTests": [
+        "OpenShell exchange: first-renewal outage, then recover",
+        "OpenShell exchange: first-renewal outage, then withdraw",
+        "OpenShell exchange: post-renewal outage, then recover",
+        "OpenShell exchange: post-renewal outage, then withdraw"
+      ]
     },
     {
       "path": "tests/integration/egress-installation-exchange.test.mjs"
